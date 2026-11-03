@@ -1,0 +1,390 @@
+{
+  "version": "1.0.0",
+  "entities": {
+    "School": {
+      "description": "Profil dan identitas lembaga SMP Negeri 1 Rangsang",
+      "collectionName": "schools",
+      "fields": {
+        "npsn": { "type": "string", "description": "Nomor Pokok Sekolah Nasional", "required": true },
+        "name": { "type": "string", "description": "Nama resmi sekolah", "required": true },
+        "status": { "type": "string", "description": "Negeri atau Swasta", "required": true },
+        "jenjang": { "type": "string", "description": "Jenjang pendidikan (SMP)", "required": true },
+        "address": { "type": "string", "description": "Alamat sekolah", "required": true },
+        "desa": { "type": "string", "description": "Desa/Kelurahan", "required": true },
+        "kecamatan": { "type": "string", "description": "Kecamatan", "required": true },
+        "kabupaten": { "type": "string", "description": "Kabupaten", "required": true },
+        "provinsi": { "type": "string", "description": "Provinsi", "required": true },
+        "postalCode": { "type": "string", "description": "Kode pos", "required": false },
+        "email": { "type": "string", "description": "Email resmi sekolah", "required": false },
+        "phone": { "type": "string", "description": "Nomor telepon sekolah", "required": false },
+        "website": { "type": "string", "description": "Situs web sekolah", "required": false },
+        "headmasterName": { "type": "string", "description": "Nama Kepala Sekolah", "required": true },
+        "headmasterNip": { "type": "string", "description": "NIP Kepala Sekolah", "required": true },
+        "activeAcademicYear": { "type": "string", "description": "Tahun Pelajaran Aktif e.g. 2024/2025", "required": true },
+        "activeSemester": { "type": "string", "description": "Semester Aktif (Ganjil / Genap)", "required": true },
+        "reportDate": { "type": "string", "description": "Tanggal penandatanganan rapor", "required": false },
+        "reportPlace": { "type": "string", "description": "Tempat penerbitan rapor", "required": false },
+        "schoolLogo": { "type": "string", "description": "URL logo sekolah di Cloud Storage", "required": false },
+        "tutwuriLogo": { "type": "string", "description": "URL logo Tut Wuri Handayani", "required": false },
+        "updatedAt": { "type": "timestamp", "description": "Waktu terakhir pembaruan data", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "User": {
+      "description": "Data pengguna akun e-Rapor dan hak akses peran",
+      "collectionName": "users",
+      "fields": {
+        "id": { "type": "string", "description": "ID pengguna (UID Firebase Auth)", "required": true },
+        "username": { "type": "string", "description": "Username unik untuk login", "required": true },
+        "email": { "type": "string", "description": "Email pengguna", "required": false },
+        "name": { "type": "string", "description": "Nama lengkap pengguna", "required": true },
+        "role": { "type": "string", "description": "Peran pengguna (admin, operator, guru, walikelas, kepsek)", "required": true },
+        "nip": { "type": "string", "description": "NIP pengguna jika guru/pegawai", "required": false },
+        "teacherId": { "type": "string", "description": "ID data guru terkait", "required": false },
+        "classId": { "type": "string", "description": "ID rombel yang diampu jika wali kelas", "required": false },
+        "avatar": { "type": "string", "description": "URL foto avatar pengguna", "required": false },
+        "status": { "type": "string", "description": "Status akun (active / inactive)", "required": true },
+        "createdAt": { "type": "timestamp", "description": "Waktu pembuatan akun", "required": false },
+        "updatedAt": { "type": "timestamp", "description": "Waktu modifikasi akun", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin()"
+      }
+    },
+    "Teacher": {
+      "description": "Data PTK / Guru dan Tenaga Kependidikan",
+      "collectionName": "teachers",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik guru", "required": true },
+        "nip": { "type": "string", "description": "NIP guru", "required": false },
+        "nuptk": { "type": "string", "description": "NUPTK guru", "required": false },
+        "name": { "type": "string", "description": "Nama lengkap guru beserta gelar", "required": true },
+        "degree": { "type": "string", "description": "Gelar akademik", "required": false },
+        "gender": { "type": "string", "description": "Jenis kelamin (L/P)", "required": true },
+        "education": { "type": "string", "description": "Pendidikan terakhir", "required": false },
+        "employmentStatus": { "type": "string", "description": "Status kepegawaian (PNS, PPPK, Honorer)", "required": false },
+        "position": { "type": "string", "description": "Jabatan", "required": false },
+        "phone": { "type": "string", "description": "Nomor kontak / HP", "required": false },
+        "email": { "type": "string", "description": "Alamat email", "required": false },
+        "subjectsTaught": { "type": "array", "description": "Daftar ID mata pelajaran yang diampu", "required": false },
+        "isHomeroom": { "type": "boolean", "description": "Apakah bertugas sebagai wali kelas", "required": true },
+        "homeroomClassId": { "type": "string", "description": "ID rombel yang diampu jika wali kelas", "required": false },
+        "photoUrl": { "type": "string", "description": "URL foto guru di Cloud Storage", "required": false },
+        "updatedAt": { "type": "timestamp", "description": "Waktu pembaruan", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Student": {
+      "description": "Data induk peserta didik",
+      "collectionName": "students",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik siswa", "required": true },
+        "nis": { "type": "string", "description": "Nomor Induk Siswa", "required": true },
+        "nisn": { "type": "string", "description": "Nomor Induk Siswa Nasional", "required": true },
+        "name": { "type": "string", "description": "Nama lengkap siswa", "required": true },
+        "gender": { "type": "string", "description": "Jenis kelamin (L/P)", "required": true },
+        "pob": { "type": "string", "description": "Tempat lahir", "required": false },
+        "dob": { "type": "string", "description": "Tanggal lahir", "required": false },
+        "religion": { "type": "string", "description": "Agama", "required": false },
+        "address": { "type": "string", "description": "Alamat tempat tinggal", "required": false },
+        "fatherName": { "type": "string", "description": "Nama ayah", "required": false },
+        "motherName": { "type": "string", "description": "Nama ibu", "required": false },
+        "fatherJob": { "type": "string", "description": "Pekerjaan ayah", "required": false },
+        "motherJob": { "type": "string", "description": "Pekerjaan ibu", "required": false },
+        "parentPhone": { "type": "string", "description": "Nomor telepon orang tua", "required": false },
+        "classId": { "type": "string", "description": "ID rombel saat ini", "required": true },
+        "status": { "type": "string", "description": "Status siswa (Aktif, Mutasi, Lulus, Keluar)", "required": true },
+        "photoUrl": { "type": "string", "description": "URL pasfoto siswa di Cloud Storage", "required": false },
+        "updatedAt": { "type": "timestamp", "description": "Waktu pembaruan", "required": false }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId()) || isGuru()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Classroom": {
+      "description": "Rombongan Belajar (Rombel) VII.1 hingga IX.3",
+      "collectionName": "classrooms",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik rombel", "required": true },
+        "name": { "type": "string", "description": "Nama kelas e.g. Kelas VII.1", "required": true },
+        "gradeLevel": { "type": "string", "description": "Tingkat kelas (7, 8, 9)", "required": true },
+        "curriculumId": { "type": "string", "description": "ID kurikulum", "required": true },
+        "homeroomTeacherId": { "type": "string", "description": "ID guru wali kelas", "required": false },
+        "roomNumber": { "type": "string", "description": "Nomor ruangan", "required": false },
+        "capacity": { "type": "number", "description": "Daya tampung siswa", "required": false },
+        "academicYear": { "type": "string", "description": "Tahun ajaran aktif", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "ClassMember": {
+      "description": "Relasi anggota rombel per tahun pelajaran dan semester",
+      "collectionName": "class_members",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik relasi siswa-kelas", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "classId": { "type": "string", "description": "ID rombel", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun pelajaran", "required": true },
+        "semester": { "type": "string", "description": "Semester", "required": true },
+        "status": { "type": "string", "description": "Status keanggotaan", "required": true }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId()) || isGuru()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "AcademicYear": {
+      "description": "Daftar tahun pelajaran sekolah",
+      "collectionName": "academic_years",
+      "fields": {
+        "id": { "type": "string", "description": "ID tahun pelajaran misal 2024-2025", "required": true },
+        "name": { "type": "string", "description": "Nama tahun ajaran e.g. 2024/2025", "required": true },
+        "isActive": { "type": "boolean", "description": "Status aktif", "required": true },
+        "startDate": { "type": "string", "description": "Tanggal mulai", "required": false },
+        "endDate": { "type": "string", "description": "Tanggal selesai", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Semester": {
+      "description": "Data semester ganjil/genap pada tahun pelajaran",
+      "collectionName": "semesters",
+      "fields": {
+        "id": { "type": "string", "description": "ID semester", "required": true },
+        "academicYearId": { "type": "string", "description": "ID tahun ajaran", "required": true },
+        "semesterName": { "type": "string", "description": "Ganjil / Genap", "required": true },
+        "isActive": { "type": "boolean", "description": "Status semester aktif", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Subject": {
+      "description": "Daftar mata pelajaran resmi",
+      "collectionName": "subjects",
+      "fields": {
+        "id": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "code": { "type": "string", "description": "Kode mapel", "required": true },
+        "name": { "type": "string", "description": "Nama mata pelajaran", "required": true },
+        "category": { "type": "string", "description": "Kelompok A, B, atau Mulok", "required": true },
+        "orderIndex": { "type": "number", "description": "Urutan tampilan di rapor", "required": true },
+        "kkm": { "type": "number", "description": "Kriteria Ketuntasan Minimal / Standar", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "TeachingAssignment": {
+      "description": "Penugasan guru mengajar mata pelajaran di kelas",
+      "collectionName": "teaching_assignments",
+      "fields": {
+        "id": { "type": "string", "description": "ID penugasan", "required": true },
+        "teacherId": { "type": "string", "description": "ID guru pengampu", "required": true },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID rombel", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun pelajaran", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Curriculum": {
+      "description": "Konfigurasi kurikulum sekolah (Kurikulum Merdeka / K13)",
+      "collectionName": "curricula",
+      "fields": {
+        "id": { "type": "string", "description": "ID kurikulum", "required": true },
+        "code": { "type": "string", "description": "Kode kurikulum", "required": true },
+        "name": { "type": "string", "description": "Nama kurikulum", "required": true },
+        "phase": { "type": "string", "description": "Fase pendidikan (Fase D)", "required": false },
+        "description": { "type": "string", "description": "Keterangan", "required": false },
+        "formatifWeight": { "type": "number", "description": "Bobot formatif (0-100)", "required": true },
+        "sumatifWeight": { "type": "number", "description": "Bobot sumatif (0-100)", "required": true },
+        "passingCriteria": { "type": "number", "description": "Batas ketuntasan nilai", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "Assessment": {
+      "description": "Tujuan Pembelajaran (TP) / Lingkup Materi Asesmen",
+      "collectionName": "assessments",
+      "fields": {
+        "id": { "type": "string", "description": "ID asesmen / TP", "required": true },
+        "curriculumId": { "type": "string", "description": "ID kurikulum", "required": true },
+        "subjectId": { "type": "string", "description": "ID mapel", "required": true },
+        "gradeLevel": { "type": "string", "description": "Tingkat (7, 8, 9)", "required": true },
+        "code": { "type": "string", "description": "Kode TP", "required": true },
+        "description": { "type": "string", "description": "Deskripsi TP / kompetensi", "required": true },
+        "semester": { "type": "string", "description": "Ganjil / Genap", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator() || isGuru()"
+      }
+    },
+    "AssessmentScore": {
+      "description": "Pengolahan nilai formatif, sumatif materi, SAS, dan nilai akhir rapor siswa",
+      "collectionName": "assessment_scores",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik nilai", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID kelas/rombel siswa", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran e.g. 2024/2025", "required": true },
+        "semester": { "type": "string", "description": "Semester Ganjil / Genap", "required": true },
+        "formatifScores": { "type": "map", "description": "Map nilai formatif", "required": false },
+        "sumatifMateriScores": { "type": "map", "description": "Map nilai sumatif lingkup materi", "required": false },
+        "sumatifAkhirSemester": { "type": "number", "description": "Nilai sumatif akhir semester (SAS)", "required": true },
+        "finalScore": { "type": "number", "description": "Nilai akhir rapor (0-100)", "required": true },
+        "predicate": { "type": "string", "description": "Predikat nilai A/B/C/D", "required": true },
+        "highestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian tertinggi", "required": true },
+        "lowestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian terendah yang perlu ditingkatkan", "required": true },
+        "notes": { "type": "string", "description": "Catatan tambahan guru", "required": false },
+        "updatedAt": { "type": "string", "description": "Timestamp terakhir nilai dihitung", "required": true }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId()) || isGuru()",
+        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId()) || isGuru()"
+      }
+    },
+    "Attendance": {
+      "description": "Rekapitulasi ketidakhadiran siswa (Sakit, Izin, Alpa)",
+      "collectionName": "attendance",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik data absensi", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Semester", "required": true },
+        "sakit": { "type": "number", "description": "Jumlah hari sakit", "required": true },
+        "izin": { "type": "number", "description": "Jumlah hari izin", "required": true },
+        "alpa": { "type": "number", "description": "Jumlah hari tanpa keterangan", "required": true }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId())",
+        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId())"
+      }
+    },
+    "Extracurricular": {
+      "description": "Master data kegiatan ekstrakurikuler sekolah",
+      "collectionName": "extracurriculars",
+      "fields": {
+        "id": { "type": "string", "description": "ID ekskul", "required": true },
+        "name": { "type": "string", "description": "Nama kegiatan ekskul", "required": true },
+        "coachName": { "type": "string", "description": "Nama pembina / pelatih", "required": false },
+        "dayAndTime": { "type": "string", "description": "Jadwal kegiatan", "required": false },
+        "description": { "type": "string", "description": "Keterangan", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isOperator()"
+      }
+    },
+    "StudentExtracurricular": {
+      "description": "Partisipasi dan nilai capaian ekstrakurikuler siswa",
+      "collectionName": "student_extracurriculars",
+      "fields": {
+        "id": { "type": "string", "description": "ID nilai ekskul", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "extracurricularId": { "type": "string", "description": "ID kegiatan ekskul", "required": true },
+        "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Semester", "required": true },
+        "predicate": { "type": "string", "description": "Predikat capaian", "required": true },
+        "description": { "type": "string", "description": "Catatan pembina", "required": true }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId())",
+        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId())"
+      }
+    },
+    "HomeroomNote": {
+      "description": "Catatan perkembangan, prestasi, dan kenaikan kelas dari wali kelas",
+      "collectionName": "homeroom_notes",
+      "fields": {
+        "id": { "type": "string", "description": "ID catatan wali kelas", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Semester", "required": true },
+        "growthNote": { "type": "string", "description": "Catatan perkembangan karakter", "required": false },
+        "achievementNote": { "type": "string", "description": "Catatan prestasi siswa", "required": false },
+        "suggestions": { "type": "string", "description": "Saran-saran", "required": false },
+        "promotionDecision": { "type": "string", "description": "Keputusan kenaikan kelas / kelulusan", "required": false }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId())",
+        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId())"
+      }
+    },
+    "ReportCard": {
+      "description": "Metadata penguncian dan penerbitan rapor siswa",
+      "collectionName": "report_cards",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik rapor", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "classId": { "type": "string", "description": "ID rombel", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Semester", "required": true },
+        "status": { "type": "string", "description": "Status cetak / locked", "required": true },
+        "printedAt": { "type": "string", "description": "Waktu cetak", "required": false },
+        "pdfUrl": { "type": "string", "description": "Link arsip PDF di Firebase Storage", "required": false }
+      },
+      "rules": {
+        "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId())",
+        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId())"
+      }
+    },
+    "AuditLog": {
+      "description": "Log jejak audit keamanan seluruh aktivitas sistem",
+      "collectionName": "audit_logs",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik log audit", "required": true },
+        "timestamp": { "type": "string", "description": "Waktu kegiatan ISO/string", "required": true },
+        "userId": { "type": "string", "description": "ID pengguna pelaksana", "required": true },
+        "userName": { "type": "string", "description": "Nama pengguna pelaksana", "required": true },
+        "role": { "type": "string", "description": "Peran pengguna saat aksi", "required": true },
+        "action": { "type": "string", "description": "Jenis aksi (LOGIN, INPUT_NILAI, GENERATE_RAPOR)", "required": true },
+        "details": { "type": "string", "description": "Keterangan detail perubahan", "required": true }
+      },
+      "rules": {
+        "read": "isAdmin() || isKepalaSekolah()",
+        "create": "isAuthenticated()",
+        "update": false,
+        "delete": false
+      }
+    },
+    "ApplicationSetting": {
+      "description": "Pengaturan sistem e-Rapor dan konfigurasi sinkronisasi cloud",
+      "collectionName": "application_settings",
+      "fields": {
+        "id": { "type": "string", "description": "ID konfigurasi", "required": true },
+        "autoBackupEnabled": { "type": "boolean", "description": "Apakah backup otomatis aktif", "required": true },
+        "backupIntervalDays": { "type": "number", "description": "Interval backup harian", "required": true },
+        "lastBackupAt": { "type": "string", "description": "Waktu terakhir pencadangan", "required": false },
+        "firebaseStorageBucket": { "type": "string", "description": "Nama bucket penyimpanan", "required": false },
+        "allowTeacherDirectEdit": { "type": "boolean", "description": "Izin edit guru", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin()"
+      }
+    }
+  }
+}

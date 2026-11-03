@@ -1,0 +1,6 @@
+{
+  "name": "E-Rapor SMP N 1 Rangsang",
+  "description": "Sistem Informasi E-Rapor Resmi SMP Negeri 1 Rangsang Kabupaten Kepulauan Meranti. Mendukung Kurikulum Merdeka & K13, pengolahan nilai formatif-sumatif, leger, absensi, dan cetak rapor standar Kemendikbud.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

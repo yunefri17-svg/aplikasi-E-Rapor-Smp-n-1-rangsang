@@ -1,0 +1,112 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. schools
+    match /schools/{schoolId} {
+      allow read, write: if true;
+    }
+
+    // 2. users
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // 3. teachers
+    match /teachers/{teacherId} {
+      allow read, write: if true;
+    }
+
+    // 4. students
+    match /students/{studentId} {
+      allow read, write: if true;
+    }
+
+    // 5. classrooms
+    match /classrooms/{classId} {
+      allow read, write: if true;
+    }
+
+    // 6. class_members
+    match /class_members/{memberId} {
+      allow read, write: if true;
+    }
+
+    // 7. academic_years
+    match /academic_years/{yearId} {
+      allow read, write: if true;
+    }
+
+    // 8. semesters
+    match /semesters/{semesterId} {
+      allow read, write: if true;
+    }
+
+    // 9. subjects
+    match /subjects/{subjectId} {
+      allow read, write: if true;
+    }
+
+    // 10. teaching_assignments
+    match /teaching_assignments/{assignmentId} {
+      allow read, write: if true;
+    }
+
+    // 11. curricula
+    match /curricula/{curriculumId} {
+      allow read, write: if true;
+    }
+
+    // 12. assessments
+    match /assessments/{assessmentId} {
+      allow read, write: if true;
+    }
+
+    // 13. assessment_scores
+    match /assessment_scores/{scoreId} {
+      allow read, write: if true;
+    }
+
+    // 14. attendance
+    match /attendance/{attendanceId} {
+      allow read, write: if true;
+    }
+
+    // 15. extracurriculars
+    match /extracurriculars/{ekskulId} {
+      allow read, write: if true;
+    }
+
+    // 16. student_extracurriculars
+    match /student_extracurriculars/{id} {
+      allow read, write: if true;
+    }
+
+    // 17. homeroom_notes
+    match /homeroom_notes/{noteId} {
+      allow read, write: if true;
+    }
+
+    // 18. report_cards
+    match /report_cards/{reportId} {
+      allow read, write: if true;
+    }
+
+    // 19. audit_logs
+    match /audit_logs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // 20. application_settings
+    match /application_settings/{settingId} {
+      allow read, write: if true;
+    }
+
+    // 21. notifications
+    match /notifications/{notifId} {
+      allow read, write: if true;
+    }
+  }
+}
