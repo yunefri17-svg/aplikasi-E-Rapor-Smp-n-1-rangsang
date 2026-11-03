@@ -136,6 +136,79 @@ export function sanitizeDocId(id: string): string {
   return String(id).replace(/[\/\s#\[\]*?]/g, '_');
 }
 
+// Tombstone / Deleted IDs tracker to prevent resurrection of deleted entities
+const DELETED_ENTITIES_KEY = 'erapor_deleted_entity_ids_v1';
+
+export function getDeletedEntityIds(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(DELETED_ENTITIES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function addDeletedEntityId(collectionName: string, id: string): void {
+  if (!id) return;
+  try {
+    const map = getDeletedEntityIds();
+    if (!map[collectionName]) {
+      map[collectionName] = [];
+    }
+    const cleanId = String(id);
+    if (!map[collectionName].includes(cleanId)) {
+      map[collectionName].push(cleanId);
+      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
+    }
+  } catch {}
+}
+
+export function isEntityDeleted(collectionName: string, id: string): boolean {
+  if (!id) return false;
+  try {
+    const map = getDeletedEntityIds();
+    const list = map[collectionName];
+    if (!list) return false;
+    const cleanId = String(id);
+    return list.includes(cleanId) || list.includes(sanitizeDocId(cleanId));
+  } catch {
+    return false;
+  }
+}
+
+export function removeDeletedEntityId(collectionName: string, id: string): void {
+  if (!id) return;
+  try {
+    const map = getDeletedEntityIds();
+    if (map[collectionName]) {
+      const cleanId = String(id);
+      map[collectionName] = map[collectionName].filter(x => x !== cleanId && x !== sanitizeDocId(cleanId));
+      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
+    }
+  } catch {}
+}
+
+/**
+ * Executes a promise with an enforced timeout so the app never hangs indefinitely
+ */
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = 15000, fallbackValue?: T): Promise<T> {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<T>((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      if (fallbackValue !== undefined) {
+        resolve(fallbackValue);
+      } else {
+        reject(new Error(`Batas waktu koneksi Firestore terlampaui (${timeoutMs / 1000} detik)`));
+      }
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function updateSyncState(patch: Partial<CloudSyncState>) {
   currentSyncState = { ...currentSyncState, ...patch };
   listeners.forEach((listener) => {
@@ -155,6 +228,8 @@ export function subscribeToSyncState(listener: SyncStateListener): () => void {
   };
 }
 
+export let unauthorizedDomainDetected = false;
+
 /**
  * Ensure Firebase Authentication is established
  */
@@ -163,8 +238,21 @@ export async function ensureFirebaseAuth(): Promise<void> {
     if (!auth.currentUser) {
       await signInAnonymously(auth);
     }
-  } catch (error) {
-    console.warn('Firebase Auth note:', error);
+  } catch (error: any) {
+    if (error?.code === 'auth/unauthorized-domain' || error?.message?.includes('unauthorized-domain')) {
+      unauthorizedDomainDetected = true;
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Anda';
+      console.error(
+        `[Firebase Auth] Domain '${currentHost}' belum didaftarkan di Firebase Console! ` +
+        `Silakan buka Firebase Console -> Authentication -> Settings -> Authorized Domains -> Tambahkan '${currentHost}'.`
+      );
+      updateSyncState({
+        status: 'error',
+        message: `Domain '${currentHost}' belum diizinkan di Firebase Console. Tambahkan domain ini di Authentication -> Authorized domains.`
+      });
+    } else {
+      console.warn('Firebase Auth note:', error?.message || error);
+    }
   }
 }
 
@@ -191,6 +279,16 @@ export async function testFirestoreConnection(forceCheck: boolean = false): Prom
       await enableNetwork(db).catch(() => {});
     }
     await ensureFirebaseAuth();
+    
+    if (unauthorizedDomainDetected) {
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Vercel Anda';
+      return {
+        success: false,
+        message: `Domain '${currentHost}' belum diizinkan di Firebase Console. Tambahkan '${currentHost}' di Firebase Console > Authentication > Settings > Authorized Domains.`,
+        latencyMs: Date.now() - start
+      };
+    }
+
     // Test server reachability with getDocFromServer
     await getDocFromServer(doc(db, 'application_settings', 'app_state'));
     const latency = Date.now() - start;
@@ -231,6 +329,14 @@ export async function testFirestoreConnection(forceCheck: boolean = false): Prom
       return {
         success: false,
         message: 'Tidak dapat menjangkau server Firestore. Periksa koneksi internet Anda.',
+        latencyMs: latency
+      };
+    }
+    if (error?.code === 'auth/unauthorized-domain' || error?.message?.includes('unauthorized-domain')) {
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Vercel Anda';
+      return {
+        success: false,
+        message: `Domain '${currentHost}' belum diizinkan di Firebase Console. Tambahkan domain ini di Authentication > Authorized domains.`,
         latencyMs: latency
       };
     }
@@ -281,161 +387,185 @@ export async function syncAllToFirestore(
 
     let totalCount = 0;
 
-    // 1. School profile
-    onProgress?.('Menyimpan profil & identitas sekolah...');
-    await setDoc(doc(db, 'schools', 'smpn1rangsang'), cleanForFirestore(dbData.schoolProfile), { merge: true });
+    // Helper to safely commit items in batches under Firestore's 500 limit with timeout protection
+    const commitInBatches = async (
+      items: { ref: any; data: any }[],
+      taskName: string
+    ) => {
+      const BATCH_SIZE = 350; // Well below 500 limit for speed and safety
+      for (let i = 0; i < items.length; i += BATCH_SIZE) {
+        const chunk = items.slice(i, i + BATCH_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach(op => {
+          batch.set(op.ref, cleanForFirestore(op.data), { merge: true });
+        });
+        await withTimeout(batch.commit(), 20000);
+        totalCount += chunk.length;
+        onProgress?.(`${taskName} (${Math.min(i + chunk.length, items.length)}/${items.length})...`);
+      }
+    };
+
+    // 0. Prune deleted master items from Cloud Firestore so deleted records don't persist in cloud
+    try {
+      const [remoteTeachers, remoteStudents, remoteClassrooms, remoteSubjects] = await Promise.all([
+        getDocs(collection(db, 'teachers')),
+        getDocs(collection(db, 'students')),
+        getDocs(collection(db, 'classrooms')),
+        getDocs(collection(db, 'subjects'))
+      ]);
+
+      const localTeacherIds = new Set(dbData.teachers.map((t) => sanitizeDocId(t.id)));
+      const localStudentIds = new Set(dbData.students.map((s) => sanitizeDocId(s.id)));
+      const localClassIds = new Set(dbData.classrooms.map((c) => sanitizeDocId(c.id)));
+      const localSubjectIds = new Set(dbData.subjects.map((s) => sanitizeDocId(s.id)));
+
+      const pruneBatch = writeBatch(db);
+      let pruneCount = 0;
+
+      remoteTeachers.docs.forEach((docSnap) => {
+        if (!localTeacherIds.has(docSnap.id) || isEntityDeleted('teachers', docSnap.id)) {
+          pruneBatch.delete(docSnap.ref);
+          pruneCount++;
+        }
+      });
+      remoteStudents.docs.forEach((docSnap) => {
+        if (!localStudentIds.has(docSnap.id) || isEntityDeleted('students', docSnap.id)) {
+          pruneBatch.delete(docSnap.ref);
+          pruneCount++;
+        }
+      });
+      remoteClassrooms.docs.forEach((docSnap) => {
+        if (!localClassIds.has(docSnap.id) || isEntityDeleted('classrooms', docSnap.id)) {
+          pruneBatch.delete(docSnap.ref);
+          pruneCount++;
+        }
+      });
+      remoteSubjects.docs.forEach((docSnap) => {
+        if (!localSubjectIds.has(docSnap.id) || isEntityDeleted('subjects', docSnap.id)) {
+          pruneBatch.delete(docSnap.ref);
+          pruneCount++;
+        }
+      });
+
+      if (pruneCount > 0) {
+        onProgress?.(`Membersihkan ${pruneCount} data terhapus di Cloud...`);
+        await withTimeout(pruneBatch.commit(), 15000);
+      }
+    } catch (pruneErr) {
+      console.warn('Prune master docs note (non-fatal):', pruneErr);
+    }
+
+    // 1. School profile (1 doc)
+    onProgress?.('Menyimpan profil & identitas sekolah (1/5)...');
+    await withTimeout(setDoc(doc(db, 'schools', 'smpn1rangsang'), cleanForFirestore(dbData.schoolProfile), { merge: true }), 15000);
     totalCount += 1;
 
-    // 2. Batch 1: Core structure (students, teachers, classrooms, curricula, subjects, TPs)
-    onProgress?.('Menyimpan data siswa, guru, rombel, dan mata pelajaran...');
-    const batch1 = writeBatch(db);
+    // 2. Master Structure (Students, Teachers, Classrooms, Subjects, Curricula, TPs, Assignments)
+    onProgress?.('Menyiapkan data siswa, guru, rombel, dan mapel (2/5)...');
+    const masterOps: { ref: any; data: any }[] = [];
 
     dbData.students.forEach((s) => {
-      batch1.set(doc(db, 'students', sanitizeDocId(s.id)), cleanForFirestore(s), { merge: true });
-      totalCount += 1;
-    });
-
-    // Prune deleted teachers from Firestore
-    try {
-      const snapTeachers = await getDocs(collection(db, 'teachers'));
-      const activeTeacherIds = new Set(dbData.teachers.map((t) => t.id));
-      snapTeachers.docs.forEach((docSnap) => {
-        if (!activeTeacherIds.has(docSnap.id)) {
-          batch1.delete(docSnap.ref);
-        }
-      });
-    } catch (e: any) {
-      if (isQuotaExceededError(e)) {
-        markQuotaExceeded();
-        return { success: true, count: totalCount, quotaExceeded: true };
+      if (!isEntityDeleted('students', s.id)) {
+        masterOps.push({ ref: doc(db, 'students', sanitizeDocId(s.id)), data: s });
       }
-      console.warn('Teacher prune note:', e);
-    }
-
+    });
     dbData.teachers.forEach((t) => {
-      batch1.set(doc(db, 'teachers', sanitizeDocId(t.id)), cleanForFirestore(t), { merge: true });
-      totalCount += 1;
+      if (!isEntityDeleted('teachers', t.id)) {
+        masterOps.push({ ref: doc(db, 'teachers', sanitizeDocId(t.id)), data: t });
+      }
     });
-
     dbData.classrooms.forEach((c) => {
-      batch1.set(doc(db, 'classrooms', sanitizeDocId(c.id)), cleanForFirestore(c), { merge: true });
-      totalCount += 1;
+      if (!isEntityDeleted('classrooms', c.id)) {
+        masterOps.push({ ref: doc(db, 'classrooms', sanitizeDocId(c.id)), data: c });
+      }
     });
-
     dbData.subjects.forEach((sub) => {
-      batch1.set(doc(db, 'subjects', sanitizeDocId(sub.id)), cleanForFirestore(sub), { merge: true });
-      totalCount += 1;
+      if (!isEntityDeleted('subjects', sub.id)) {
+        masterOps.push({ ref: doc(db, 'subjects', sanitizeDocId(sub.id)), data: sub });
+      }
     });
-
     dbData.curricula.forEach((cur) => {
-      batch1.set(doc(db, 'curricula', sanitizeDocId(cur.id)), cleanForFirestore(cur), { merge: true });
-      totalCount += 1;
+      masterOps.push({ ref: doc(db, 'curricula', sanitizeDocId(cur.id)), data: cur });
     });
-
     dbData.learningObjectives.forEach((tp) => {
-      batch1.set(doc(db, 'assessments', sanitizeDocId(tp.id)), cleanForFirestore(tp), { merge: true });
-      totalCount += 1;
+      masterOps.push({ ref: doc(db, 'assessments', sanitizeDocId(tp.id)), data: tp });
     });
-
     if (dbData.teachingAssignments) {
       dbData.teachingAssignments.forEach((ta) => {
-        batch1.set(doc(db, 'teaching_assignments', sanitizeDocId(ta.id)), cleanForFirestore(ta), { merge: true });
-        totalCount += 1;
-      });
-    }
-
-    await batch1.commit();
-
-    // 3. Batch 2: Scores, Attendance, Homeroom Notes, Extracurriculars
-    onProgress?.('Menyimpan nilai capaian, absensi, ekskul, dan catatan rapor...');
-    const batch2 = writeBatch(db);
-
-    dbData.scores.forEach((sc) => {
-      batch2.set(doc(db, 'assessment_scores', sanitizeDocId(sc.id)), cleanForFirestore(sc), { merge: true });
-      totalCount += 1;
-    });
-
-    dbData.attendance.forEach((att) => {
-      batch2.set(doc(db, 'attendance', sanitizeDocId(att.id)), cleanForFirestore(att), { merge: true });
-      totalCount += 1;
-    });
-
-    dbData.homeroomNotes.forEach((hn) => {
-      batch2.set(doc(db, 'homeroom_notes', sanitizeDocId(hn.id)), cleanForFirestore(hn), { merge: true });
-      totalCount += 1;
-    });
-
-    dbData.extracurriculars.forEach((e) => {
-      batch2.set(doc(db, 'extracurriculars', sanitizeDocId(e.id)), cleanForFirestore(e), { merge: true });
-      totalCount += 1;
-    });
-
-    dbData.studentExtracurriculars.forEach((se) => {
-      batch2.set(doc(db, 'student_extracurriculars', sanitizeDocId(se.id)), cleanForFirestore(se), { merge: true });
-      totalCount += 1;
-    });
-
-    // 4. Batch 2: Users (Simulated Login Accounts) & Prune deleted users
-    try {
-      const snapUsers = await getDocs(collection(db, 'users'));
-      const activeUserIds = new Set(dbData.users.map((u) => u.id));
-      snapUsers.docs.forEach((docSnap) => {
-        if (!activeUserIds.has(docSnap.id)) {
-          batch2.delete(docSnap.ref);
+        if (!isEntityDeleted('teaching_assignments', ta.id)) {
+          masterOps.push({ ref: doc(db, 'teaching_assignments', sanitizeDocId(ta.id)), data: ta });
         }
       });
-    } catch (e: any) {
-      if (isQuotaExceededError(e)) {
-        markQuotaExceeded();
-        return { success: true, count: totalCount, quotaExceeded: true };
-      }
-      console.warn('User prune note:', e);
     }
 
-    dbData.users.forEach((u) => {
-      batch2.set(doc(db, 'users', sanitizeDocId(u.id)), cleanForFirestore(u), { merge: true });
-      totalCount += 1;
-    });
+    await commitInBatches(masterOps, 'Mengunggah struktur master');
 
-    // 5. Batch 2: Kurikulum Merdeka 2025 Modules
+    // 3. Scores & Kurikulum Merdeka 2025 Assessments
+    onProgress?.('Menyimpan data penilaian & capaian siswa (3/5)...');
+    const assessmentOps: { ref: any; data: any }[] = [];
+
+    dbData.scores.forEach((sc) => {
+      assessmentOps.push({ ref: doc(db, 'assessment_scores', sanitizeDocId(sc.id)), data: sc });
+    });
     dbData.formativeAssessments.forEach((fa) => {
-      batch2.set(doc(db, 'formative_assessments', sanitizeDocId(fa.id)), cleanForFirestore(fa), { merge: true });
-      totalCount += 1;
+      assessmentOps.push({ ref: doc(db, 'formative_assessments', sanitizeDocId(fa.id)), data: fa });
     });
-
     dbData.summativeAssessments.forEach((sa) => {
-      batch2.set(doc(db, 'summative_assessments', sanitizeDocId(sa.id)), cleanForFirestore(sa), { merge: true });
-      totalCount += 1;
+      assessmentOps.push({ ref: doc(db, 'summative_assessments', sanitizeDocId(sa.id)), data: sa });
     });
-
     dbData.kktpConfigs.forEach((kc) => {
-      batch2.set(doc(db, 'kktp_configs', sanitizeDocId(kc.id)), cleanForFirestore(kc), { merge: true });
-      totalCount += 1;
+      assessmentOps.push({ ref: doc(db, 'kktp_configs', sanitizeDocId(kc.id)), data: kc });
     });
-
     dbData.finalScoreConfigs.forEach((fsc) => {
-      batch2.set(doc(db, 'final_score_configs', sanitizeDocId(`${fsc.subjectId}_${fsc.classId}`)), cleanForFirestore(fsc), { merge: true });
-      totalCount += 1;
+      assessmentOps.push({ ref: doc(db, 'final_score_configs', sanitizeDocId(`${fsc.subjectId}_${fsc.classId}`)), data: fsc });
     });
 
-    // Master App State Metadata
+    await commitInBatches(assessmentOps, 'Mengunggah data penilaian');
+
+    // 4. Attendance, Homeroom Notes, Extracurriculars, Users
+    onProgress?.('Menyimpan absensi, ekstrakurikuler, dan catatan rapor (4/5)...');
+    const reportOps: { ref: any; data: any }[] = [];
+
+    dbData.attendance.forEach((att) => {
+      reportOps.push({ ref: doc(db, 'attendance', sanitizeDocId(att.id)), data: att });
+    });
+    dbData.homeroomNotes.forEach((hn) => {
+      reportOps.push({ ref: doc(db, 'homeroom_notes', sanitizeDocId(hn.id)), data: hn });
+    });
+    dbData.extracurriculars.forEach((e) => {
+      reportOps.push({ ref: doc(db, 'extracurriculars', sanitizeDocId(e.id)), data: e });
+    });
+    dbData.studentExtracurriculars.forEach((se) => {
+      reportOps.push({ ref: doc(db, 'student_extracurriculars', sanitizeDocId(se.id)), data: se });
+    });
+    dbData.users.forEach((u) => {
+      if (!isEntityDeleted('users', u.id)) {
+        reportOps.push({ ref: doc(db, 'users', sanitizeDocId(u.id)), data: u });
+      }
+    });
+
+    await commitInBatches(reportOps, 'Mengunggah data rapor');
+
+    // 5. Master App State Metadata (5/5)
+    onProgress?.('Menyelesaikan metadata status aplikasi (5/5)...');
     const nowTimeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-    batch2.set(
-      doc(db, 'application_settings', 'app_state'),
-      {
-        lastUpdated: new Date().toISOString(),
-        lastSyncDisplay: nowTimeStr,
-        lastSyncUser: user?.name || 'Administrator',
-        activeAcademicYear: dbData.schoolProfile.activeAcademicYear,
-        activeSemester: dbData.schoolProfile.activeSemester,
-        totalStudents: dbData.students.length,
-        totalTeachers: dbData.teachers.length
-      },
-      { merge: true }
+    await withTimeout(
+      setDoc(
+        doc(db, 'application_settings', 'app_state'),
+        {
+          lastUpdated: new Date().toISOString(),
+          lastSyncDisplay: nowTimeStr,
+          lastSyncUser: user?.name || 'Administrator',
+          activeAcademicYear: dbData.schoolProfile.activeAcademicYear,
+          activeSemester: dbData.schoolProfile.activeSemester,
+          totalStudents: dbData.students.length,
+          totalTeachers: dbData.teachers.length
+        },
+        { merge: true }
+      ),
+      15000
     );
     totalCount += 1;
-
-    await batch2.commit();
 
     updateSyncState({
       status: 'synced',
@@ -518,16 +648,6 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
     await ensureFirebaseAuth();
     updateSyncState({ status: 'syncing', message: 'Mengambil data dari Cloud Firestore...' });
 
-    // Precheck app_state to see if cloud database has been populated yet
-    const stateDoc = await getDoc(doc(db, 'application_settings', 'app_state'));
-    if (!stateDoc.exists()) {
-      updateSyncState({
-        status: 'connected',
-        message: 'Cloud Firebase aktif (menyiapkan sinkronisasi awal)'
-      });
-      return null;
-    }
-
     const [
       schoolDoc,
       studentsSnap,
@@ -568,7 +688,19 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'final_score_configs'))
     ]);
 
-    if (!schoolDoc.exists() || studentsSnap.empty) {
+    const hasAnyCloudData = 
+      schoolDoc.exists() || 
+      !studentsSnap.empty || 
+      !teachersSnap.empty || 
+      !scoresSnap.empty ||
+      !formativeSnap.empty ||
+      !summativeSnap.empty;
+
+    if (!hasAnyCloudData) {
+      updateSyncState({
+        status: 'connected',
+        message: 'Cloud Firebase aktif (database cloud kosong, siap sinkronisasi awal)'
+      });
       return null;
     }
 
@@ -580,24 +712,24 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
     });
 
     return {
-      schoolProfile: schoolDoc.data() as SchoolProfile,
-      students: studentsSnap.docs.map((d) => d.data() as Student),
-      teachers: teachersSnap.docs.map((d) => d.data() as Teacher),
-      classrooms: sortClassrooms(classroomsSnap.docs.map((d) => d.data() as Classroom)),
-      subjects: subjectsSnap.docs.map((d) => d.data() as Subject),
-      scores: scoresSnap.docs.map((d) => d.data() as AssessmentScore),
-      attendance: attendanceSnap.docs.map((d) => d.data() as Attendance),
-      homeroomNotes: notesSnap.docs.map((d) => d.data() as HomeroomNote),
-      extracurriculars: ekskulSnap.docs.map((d) => d.data() as Extracurricular),
-      studentExtracurriculars: studentEkskulSnap.docs.map((d) => d.data() as StudentExtracurricular),
-      curricula: curriculaSnap.docs.map((d) => d.data() as Curriculum),
-      learningObjectives: tpsSnap.docs.map((d) => d.data() as LearningObjective),
-      users: usersSnap.docs.map((d) => d.data() as User),
-      teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment),
-      formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment),
-      summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
-      kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
-      finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig)
+      ...(schoolDoc.exists() ? { schoolProfile: schoolDoc.data() as SchoolProfile } : {}),
+      ...(studentsSnap.empty ? {} : { students: studentsSnap.docs.map((d) => d.data() as Student) }),
+      ...(teachersSnap.empty ? {} : { teachers: teachersSnap.docs.map((d) => d.data() as Teacher) }),
+      ...(classroomsSnap.empty ? {} : { classrooms: sortClassrooms(classroomsSnap.docs.map((d) => d.data() as Classroom)) }),
+      ...(subjectsSnap.empty ? {} : { subjects: subjectsSnap.docs.map((d) => d.data() as Subject) }),
+      ...(scoresSnap.empty ? {} : { scores: scoresSnap.docs.map((d) => d.data() as AssessmentScore) }),
+      ...(attendanceSnap.empty ? {} : { attendance: attendanceSnap.docs.map((d) => d.data() as Attendance) }),
+      ...(notesSnap.empty ? {} : { homeroomNotes: notesSnap.docs.map((d) => d.data() as HomeroomNote) }),
+      ...(ekskulSnap.empty ? {} : { extracurriculars: ekskulSnap.docs.map((d) => d.data() as Extracurricular) }),
+      ...(studentEkskulSnap.empty ? {} : { studentExtracurriculars: studentEkskulSnap.docs.map((d) => d.data() as StudentExtracurricular) }),
+      ...(curriculaSnap.empty ? {} : { curricula: curriculaSnap.docs.map((d) => d.data() as Curriculum) }),
+      ...(tpsSnap.empty ? {} : { learningObjectives: tpsSnap.docs.map((d) => d.data() as LearningObjective) }),
+      ...(usersSnap.empty ? {} : { users: usersSnap.docs.map((d) => d.data() as User) }),
+      ...(teachingAssignmentsSnap.empty ? {} : { teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment) }),
+      ...(formativeSnap.empty ? {} : { formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment) }),
+      ...(summativeSnap.empty ? {} : { summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment) }),
+      ...(kktpSnap.empty ? {} : { kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig) }),
+      ...(finalConfigSnap.empty ? {} : { finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig) })
     };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
@@ -654,32 +786,35 @@ export function queueAutoSyncToFirestore(dbData: AppDatabase, delayMs: number = 
   }, delayMs);
 }
 
+export interface FirestoreRealtimePayload {
+  scores?: AssessmentScore[]; 
+  notifications?: AppNotification[];
+  formativeAssessments?: FormativeAssessment[];
+  summativeAssessments?: SummativeAssessment[];
+  kktpConfigs?: KKTPConfig[];
+  finalScoreConfigs?: SubjectFinalScoreConfig[];
+  students?: Student[];
+  teachers?: Teacher[];
+  classrooms?: Classroom[];
+  subjects?: Subject[];
+  teachingAssignments?: TeachingAssignment[];
+  learningObjectives?: LearningObjective[];
+  curricula?: Curriculum[];
+  users?: User[];
+  attendance?: Attendance[];
+  homeroomNotes?: HomeroomNote[];
+  schoolProfile?: SchoolProfile[];
+  extracurriculars?: Extracurricular[];
+  studentExtracurriculars?: StudentExtracurricular[];
+  removedDocIds?: Record<string, string[]>;
+}
+
 /**
  * Real-time listener for Assessment Scores & Notifications from Cloud Firestore.
- * Updates state instantly when Guru Mata Pelajaran inputs scores in another browser/device.
+ * Updates state instantly across all connected devices when data is added, changed, or deleted.
  */
 export function listenToFirestoreRealtime(
-  onDataUpdate: (payload: { 
-    scores?: AssessmentScore[]; 
-    notifications?: AppNotification[];
-    formativeAssessments?: FormativeAssessment[];
-    summativeAssessments?: SummativeAssessment[];
-    kktpConfigs?: KKTPConfig[];
-    finalScoreConfigs?: SubjectFinalScoreConfig[];
-    students?: Student[];
-    teachers?: Teacher[];
-    classrooms?: Classroom[];
-    subjects?: Subject[];
-    teachingAssignments?: TeachingAssignment[];
-    learningObjectives?: LearningObjective[];
-    curricula?: Curriculum[];
-    users?: User[];
-    attendance?: Attendance[];
-    homeroomNotes?: HomeroomNote[];
-    schoolProfile?: SchoolProfile[];
-    extracurriculars?: Extracurricular[];
-    studentExtracurriculars?: StudentExtracurricular[];
-  }) => void
+  onDataUpdate: (payload: FirestoreRealtimePayload) => void
 ): () => void {
   if (isCloudQuotaExhausted) {
     return () => {};
@@ -691,13 +826,26 @@ export function listenToFirestoreRealtime(
     return onSnapshot(
       collection(db, collectionName),
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: any[] = [];
-          snapshot.forEach((docSnap) => {
-            items.push(docSnap.data());
-          });
-          onDataUpdate({ [payloadKey]: items });
-        }
+        const items: any[] = [];
+        snapshot.forEach((docSnap) => {
+          items.push(docSnap.data());
+        });
+
+        const removedIds: string[] = [];
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'removed') {
+            removedIds.push(change.doc.id);
+            const rawId = (change.doc.data() as any)?.id;
+            if (rawId && rawId !== change.doc.id) {
+              removedIds.push(rawId);
+            }
+          }
+        });
+
+        onDataUpdate({ 
+          [payloadKey]: items,
+          removedDocIds: removedIds.length > 0 ? { [payloadKey]: removedIds } : undefined
+        });
       },
       (err) => {
         if (isQuotaExceededError(err)) {
@@ -820,16 +968,20 @@ export async function surgicalSync(
 /**
  * Delete a document from Cloud Firestore directly so deleted records do not reappear on refresh.
  */
-export async function deleteDocFromFirestore(collectionName: string, docId: string): Promise<void> {
-  if (isCloudQuotaExhausted) return;
+export async function deleteDocFromFirestore(collectionName: string, docId: string): Promise<boolean> {
+  if (isCloudQuotaExhausted) return true;
+  addDeletedEntityId(collectionName, docId);
   try {
-    await ensureFirebaseAuth();
-    await deleteDoc(doc(db, collectionName, sanitizeDocId(docId)));
+    await withTimeout(ensureFirebaseAuth(), 8000).catch(() => {});
+    await withTimeout(deleteDoc(doc(db, collectionName, sanitizeDocId(docId))), 10000);
+    return true;
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
       markQuotaExceeded();
+      return true;
     } else {
       console.warn(`Failed to delete ${collectionName}/${docId} from Firestore:`, err);
+      return false;
     }
   }
 }

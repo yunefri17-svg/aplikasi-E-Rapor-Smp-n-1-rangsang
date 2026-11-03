@@ -33,7 +33,11 @@ import {
   FileText,
   AlertCircle,
   ExternalLink,
-  Trash2
+  Trash2,
+  Key,
+  Copy,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface PengaturanAplikasiViewProps {
@@ -100,6 +104,16 @@ export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
 
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoUploadSuccess, setLogoUploadSuccess] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [copiedApiKey, setCopiedApiKey] = useState(false);
+
+  const handleCopyApiKey = () => {
+    if (firebaseConfig.apiKey) {
+      navigator.clipboard.writeText(firebaseConfig.apiKey);
+      setCopiedApiKey(true);
+      setTimeout(() => setCopiedApiKey(false), 2000);
+    }
+  };
 
   // Test connection on mount once
   useEffect(() => {
@@ -299,7 +313,47 @@ export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
         </div>
 
         {/* Cloud Parameters Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+          {/* API Key Box */}
+          <div className="bg-white/5 rounded-xl p-3 border border-white/10 relative group">
+            <div className="flex items-center justify-between">
+              <span className="text-amber-300 text-[10px] font-medium block uppercase tracking-wider flex items-center gap-1">
+                <Key className="w-3 h-3 text-amber-400" />
+                Firebase API Key
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="p-1 rounded text-slate-400 hover:text-white transition"
+                  title={showApiKey ? 'Sembunyikan API Key' : 'Tampilkan API Key'}
+                >
+                  {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyApiKey}
+                  className="p-1 rounded text-slate-400 hover:text-emerald-400 transition"
+                  title="Salin API Key"
+                >
+                  {copiedApiKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+            <div className="font-mono font-bold text-slate-100 truncate block mt-1 text-[11px]">
+              {showApiKey ? (
+                firebaseConfig.apiKey
+              ) : (
+                <span>{firebaseConfig.apiKey.slice(0, 8)}•••••••••••••••••••••{firebaseConfig.apiKey.slice(-4)}</span>
+              )}
+            </div>
+            {copiedApiKey && (
+              <span className="absolute top-2 right-14 text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                Tersalin!
+              </span>
+            )}
+          </div>
+
           <div className="bg-white/5 rounded-xl p-3 border border-white/10">
             <span className="text-indigo-300 text-[10px] font-medium block uppercase tracking-wider">Project ID</span>
             <span className="font-mono font-bold text-slate-100 truncate block mt-0.5 text-[11px]">
@@ -310,7 +364,14 @@ export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
           <div className="bg-white/5 rounded-xl p-3 border border-white/10">
             <span className="text-indigo-300 text-[10px] font-medium block uppercase tracking-wider">Database ID</span>
             <span className="font-mono font-bold text-slate-100 truncate block mt-0.5 text-[11px]" title={firebaseConfig.firestoreDatabaseId}>
-              {firebaseConfig.firestoreDatabaseId ? 'ai-studio-eraporsmpn1...' : '(default)'}
+              {firebaseConfig.firestoreDatabaseId ? firebaseConfig.firestoreDatabaseId : '(default)'}
+            </span>
+          </div>
+
+          <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+            <span className="text-indigo-300 text-[10px] font-medium block uppercase tracking-wider">App ID</span>
+            <span className="font-mono font-bold text-slate-100 truncate block mt-0.5 text-[11px]" title={firebaseConfig.appId}>
+              {firebaseConfig.appId}
             </span>
           </div>
 

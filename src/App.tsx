@@ -54,7 +54,11 @@ import {
   deleteDocFromFirestore,
   surgicalSync,
   reconnectToCloud,
-  CloudSyncState
+  CloudSyncState,
+  isEntityDeleted,
+  addDeletedEntityId,
+  removeDeletedEntityId,
+  sanitizeDocId
 } from './services/firebaseSync';
 
 // Views
@@ -224,13 +228,36 @@ export default function App() {
         const updated = { ...prev };
 
         const mergeList = (key: keyof AppDatabase, incoming: any[] | undefined) => {
+          let currentList = ((prev[key] as any[]) || []).slice();
+          const removedForCollection = payload.removedDocIds?.[key as string] || [];
+
+          // 1. Remove items that were deleted in Firestore
+          if (removedForCollection.length > 0) {
+            const removedSet = new Set(removedForCollection);
+            const initialLen = currentList.length;
+            currentList = currentList.filter(
+              (item) => item && item.id && !removedSet.has(item.id) && !removedSet.has(sanitizeDocId(item.id))
+            );
+            if (currentList.length !== initialLen) {
+              changed = true;
+            }
+          }
+
           if (incoming && incoming.length > 0) {
+            // Filter incoming by tombstone list so deleted items are never revived
+            const validIncoming = incoming.filter(
+              (item) => item && item.id && !isEntityDeleted(key as string, item.id)
+            );
+            const incomingMap = new Map(validIncoming.map((item) => [item.id, item]));
+
             // Special cases for composite IDs or specific merging needs
             if (key === 'finalScoreConfigs') {
               if (!updated.finalScoreConfigs) updated.finalScoreConfigs = [];
-              incoming.forEach(fsc => {
+              validIncoming.forEach((fsc) => {
                 if (!fsc) return;
-                const idx = updated.finalScoreConfigs.findIndex(c => c && c.subjectId === fsc.subjectId && c.classId === fsc.classId);
+                const idx = updated.finalScoreConfigs.findIndex(
+                  (c) => c && c.subjectId === fsc.subjectId && c.classId === fsc.classId
+                );
                 if (idx >= 0) {
                   const existing = updated.finalScoreConfigs[idx];
                   if (JSON.stringify(existing) !== JSON.stringify(fsc)) {
@@ -245,24 +272,27 @@ export default function App() {
               return;
             }
 
-            // Standard ID-based merge
-            const currentList = (prev[key] as any[]) || [];
-            const incomingMap = new Map(incoming.filter(item => item && item.id).map(item => [item.id, item]));
-            
-            // 1. Update existing items
-            const nextList = currentList.map(item => {
-              if (!item || !item.id) return item;
-              const cloudItem = incomingMap.get(item.id);
-              if (cloudItem && JSON.stringify(item) !== JSON.stringify(cloudItem)) {
-                changed = true;
-                return cloudItem;
-              }
-              return item;
-            });
+            // Standard ID-based merge:
+            // 2. Update existing items (and discard any locally marked as deleted)
+            const nextList = currentList
+              .filter((item) => item && item.id && !isEntityDeleted(key as string, item.id))
+              .map((item) => {
+                const cloudItem = incomingMap.get(item.id);
+                if (cloudItem && JSON.stringify(item) !== JSON.stringify(cloudItem)) {
+                  changed = true;
+                  return cloudItem;
+                }
+                return item;
+              });
 
-            // 2. Add new items
-            incoming.forEach(item => {
-              if (item && item.id && !currentList.some(existing => existing && existing.id === item.id)) {
+            // 3. Add new items ONLY if not already in list and not marked as deleted
+            validIncoming.forEach((item) => {
+              if (
+                item &&
+                item.id &&
+                !isEntityDeleted(key as string, item.id) &&
+                !nextList.some((existing) => existing && existing.id === item.id)
+              ) {
                 nextList.push(item);
                 changed = true;
               }
@@ -271,6 +301,8 @@ export default function App() {
             if (changed) {
               (updated as any)[key] = nextList;
             }
+          } else if (removedForCollection.length > 0 && changed) {
+            (updated as any)[key] = currentList;
           }
         };
 
@@ -315,23 +347,58 @@ export default function App() {
     });
 
     // Initial check & auto-sync to Cloud Firestore on boot
-    // Initial check & auto-sync to Cloud Firestore on boot
     const initCloud = async () => {
       try {
         const conn = await testFirestoreConnection();
         if (conn.success) {
           const remoteData = await fetchFromFirestore();
-          if (remoteData && remoteData.students && remoteData.students.length > 0) {
+          if (remoteData && Object.keys(remoteData).length > 0) {
             setDb((prev) => {
+              // Filter out any tombstoned entities so deleted items never get resurrected on refresh
+              const cleanRemoteTeachers = (remoteData.teachers || []).filter(
+                (t) => t && t.id && !isEntityDeleted('teachers', t.id)
+              );
+              const cleanRemoteStudents = (remoteData.students || []).filter(
+                (s) => s && s.id && !isEntityDeleted('students', s.id)
+              );
+              const cleanRemoteClassrooms = (remoteData.classrooms || []).filter(
+                (c) => c && c.id && !isEntityDeleted('classrooms', c.id)
+              );
+              const cleanRemoteSubjects = (remoteData.subjects || []).filter(
+                (sub) => sub && sub.id && !isEntityDeleted('subjects', sub.id)
+              );
+
+              // Background delete of stale tombstoned items still lingering in Firestore
+              (remoteData.teachers || []).forEach((t) => {
+                if (t && t.id && isEntityDeleted('teachers', t.id)) {
+                  deleteDocFromFirestore('teachers', t.id).catch(() => {});
+                }
+              });
+              (remoteData.students || []).forEach((s) => {
+                if (s && s.id && isEntityDeleted('students', s.id)) {
+                  deleteDocFromFirestore('students', s.id).catch(() => {});
+                }
+              });
+              (remoteData.classrooms || []).forEach((c) => {
+                if (c && c.id && isEntityDeleted('classrooms', c.id)) {
+                  deleteDocFromFirestore('classrooms', c.id).catch(() => {});
+                }
+              });
+              (remoteData.subjects || []).forEach((sub) => {
+                if (sub && sub.id && isEntityDeleted('subjects', sub.id)) {
+                  deleteDocFromFirestore('subjects', sub.id).catch(() => {});
+                }
+              });
+
               const merged: AppDatabase = {
                 ...prev,
                 schoolProfile: remoteData.schoolProfile || prev.schoolProfile,
-                students: remoteData.students && remoteData.students.length > 0 ? remoteData.students : prev.students,
-                teachers: remoteData.teachers && remoteData.teachers.length > 0 ? remoteData.teachers : prev.teachers,
+                students: cleanRemoteStudents.length > 0 ? cleanRemoteStudents : prev.students.filter(s => !isEntityDeleted('students', s.id)),
+                teachers: cleanRemoteTeachers.length > 0 ? cleanRemoteTeachers : prev.teachers.filter(t => !isEntityDeleted('teachers', t.id)),
                 classrooms: sortClassrooms(
-                  remoteData.classrooms && remoteData.classrooms.length > 0 ? remoteData.classrooms : prev.classrooms
+                  cleanRemoteClassrooms.length > 0 ? cleanRemoteClassrooms : prev.classrooms.filter(c => !isEntityDeleted('classrooms', c.id))
                 ),
-                subjects: remoteData.subjects && remoteData.subjects.length > 0 ? remoteData.subjects : prev.subjects,
+                subjects: cleanRemoteSubjects.length > 0 ? cleanRemoteSubjects : prev.subjects.filter(sub => !isEntityDeleted('subjects', sub.id)),
                 curricula: remoteData.curricula && remoteData.curricula.length > 0 ? remoteData.curricula : prev.curricula,
                 learningObjectives: remoteData.learningObjectives && remoteData.learningObjectives.length > 0 ? remoteData.learningObjectives : prev.learningObjectives,
                 scores: (() => {
@@ -363,14 +430,18 @@ export default function App() {
                   remoteNotes.forEach((n) => noteMap.set(noteKey(n), n));
                   return Array.from(noteMap.values());
                 })(),
-                teachingAssignments: remoteData.teachingAssignments && remoteData.teachingAssignments.length > 0
-                  ? remoteData.teachingAssignments
-                  : prev.teachingAssignments,
-                users: remoteData.users && remoteData.users.length > 0 ? remoteData.users : prev.users,
+                teachingAssignments: (remoteData.teachingAssignments || prev.teachingAssignments || []).filter(
+                  (ta) => ta && !isEntityDeleted('teaching_assignments', ta.id) && !isEntityDeleted('teachers', ta.teacherId)
+                ),
+                users: (remoteData.users || prev.users || []).filter(
+                  (u) => u && !isEntityDeleted('users', u.id) && (!u.teacherId || !isEntityDeleted('teachers', u.teacherId))
+                ),
                 formativeAssessments: remoteData.formativeAssessments || prev.formativeAssessments,
                 summativeAssessments: remoteData.summativeAssessments || prev.summativeAssessments,
                 kktpConfigs: remoteData.kktpConfigs || prev.kktpConfigs,
-                finalScoreConfigs: remoteData.finalScoreConfigs || prev.finalScoreConfigs
+                finalScoreConfigs: remoteData.finalScoreConfigs || prev.finalScoreConfigs,
+                extracurriculars: remoteData.extracurriculars || prev.extracurriculars,
+                studentExtracurriculars: remoteData.studentExtracurriculars || prev.studentExtracurriculars
               };
               const cleaned = sanitizeTeachingAssignments(syncUsersWithTeachers(merged));
 
@@ -396,6 +467,9 @@ export default function App() {
               saveDatabase(cleaned);
               return cleaned;
             });
+          } else {
+            // If Cloud is completely blank, queue auto sync so initial data is stored in Firestore
+            queueAutoSyncToFirestore(db, 3000);
           }
         }
       } catch (err) {
@@ -463,6 +537,7 @@ export default function App() {
 
   // Handlers for Teachers
   const handleSaveTeacher = (teacher: Teacher) => {
+    removeDeletedEntityId('teachers', teacher.id);
     updateDbAndSave((prev) => {
       const idx = prev.teachers.findIndex((t) => t.id === teacher.id);
       let newTeachers = [...prev.teachers];
@@ -498,7 +573,8 @@ export default function App() {
     logActivity(currentUser, 'Simpan Guru', `Menyimpan data guru: ${teacher.name}`);
   };
 
-  const handleDeleteTeacher = (teacherId: string) => {
+  const handleDeleteTeacher = async (teacherId: string) => {
+    addDeletedEntityId('teachers', teacherId);
     const teacherToDelete = db.teachers.find((t) => t.id === teacherId);
     
     // Find associated user accounts (by teacherId, nip, or name matching)
@@ -509,8 +585,9 @@ export default function App() {
         (teacherToDelete && u.name && u.name.toLowerCase().trim() === teacherToDelete.name.toLowerCase().trim())
     );
 
-    // Delete associated user documents from Firestore immediately
+    // Record tombstones and delete associated user documents from Firestore immediately
     usersToDelete.forEach((u) => {
+      addDeletedEntityId('users', u.id);
       deleteDocFromFirestore('users', u.id).catch(() => {});
     });
 
@@ -534,23 +611,29 @@ export default function App() {
 
     const assignmentsToDelete = (db.teachingAssignments || []).filter((ta) => ta.teacherId === teacherId);
     assignmentsToDelete.forEach((ta) => {
+      addDeletedEntityId('teaching_assignments', ta.id);
       deleteDocFromFirestore('teaching_assignments', ta.id).catch(() => {});
     });
 
+    // Update local state and persist to localStorage
     updateDbAndSave((prev) =>
       syncUsersWithTeachers({
         ...prev,
         teachers: prev.teachers.filter((t) => t.id !== teacherId),
         teachingAssignments: (prev.teachingAssignments || []).filter((ta) => ta.teacherId !== teacherId),
         users: prev.users.filter((u) => !usersToDelete.some((del) => del.id === u.id))
-      })
+      }),
+      true
     );
-    deleteDocFromFirestore('teachers', teacherId).catch(() => {});
+
+    // Explicitly delete teacher from Cloud Firestore
+    await deleteDocFromFirestore('teachers', teacherId);
     logActivity(currentUser, 'Hapus Guru & Hak Akses', `Menghapus guru ${teacherToDelete?.name || teacherId} dan seluruh akun hak akses terkait.`);
   };
 
   // Handlers for Students
   const handleSaveStudent = (student: Student) => {
+    removeDeletedEntityId('students', student.id);
     updateDbAndSave((prev) => {
       const idx = prev.students.findIndex((s) => s.id === student.id);
       let newStudents = [...prev.students];
@@ -564,17 +647,19 @@ export default function App() {
     logActivity(currentUser, 'Simpan Siswa', `Menyimpan data peserta didik: ${student.name}`);
   };
 
-  const handleDeleteStudent = (studentId: string) => {
+  const handleDeleteStudent = async (studentId: string) => {
+    addDeletedEntityId('students', studentId);
     updateDbAndSave((prev) => ({
       ...prev,
       students: prev.students.filter((s) => s.id !== studentId),
       scores: prev.scores.filter((sc) => sc.studentId !== studentId)
-    }));
-    deleteDocFromFirestore('students', studentId).catch(() => {});
+    }), true);
+    await deleteDocFromFirestore('students', studentId);
     logActivity(currentUser, 'Hapus Siswa', `Menghapus data siswa ID: ${studentId}`);
   };
 
   const handleImportStudents = (newStudents: Student[]) => {
+    newStudents.forEach((s) => removeDeletedEntityId('students', s.id));
     updateDbAndSave((prev) => ({
       ...prev,
       students: [...prev.students, ...newStudents]
@@ -584,6 +669,7 @@ export default function App() {
 
   // Handlers for Classrooms
   const handleSaveClassroom = (classroom: Classroom) => {
+    removeDeletedEntityId('classrooms', classroom.id);
     updateDbAndSave((prev) => {
       const idx = prev.classrooms.findIndex((c) => c.id === classroom.id);
       let newCls = [...prev.classrooms];
@@ -597,17 +683,19 @@ export default function App() {
     logActivity(currentUser, 'Simpan Rombel', `Menyimpan rombel: ${classroom.name}`);
   };
 
-  const handleDeleteClassroom = (classroomId: string) => {
+  const handleDeleteClassroom = async (classroomId: string) => {
+    addDeletedEntityId('classrooms', classroomId);
     updateDbAndSave((prev) => ({
       ...prev,
       classrooms: prev.classrooms.filter((c) => c.id !== classroomId)
-    }));
-    deleteDocFromFirestore('classrooms', classroomId).catch(() => {});
+    }), true);
+    await deleteDocFromFirestore('classrooms', classroomId);
     logActivity(currentUser, 'Hapus Rombel', `Menghapus rombel ID: ${classroomId}`);
   };
 
   // Handlers for Subjects
   const handleSaveSubject = (subject: Subject) => {
+    removeDeletedEntityId('subjects', subject.id);
     updateDbAndSave((prev) => {
       const idx = prev.subjects.findIndex((s) => s.id === subject.id);
       let newSubs = [...prev.subjects];
@@ -621,12 +709,13 @@ export default function App() {
     logActivity(currentUser, 'Simpan Mapel', `Menyimpan mata pelajaran: ${subject.name}`);
   };
 
-  const handleDeleteSubject = (subjectId: string) => {
+  const handleDeleteSubject = async (subjectId: string) => {
+    addDeletedEntityId('subjects', subjectId);
     updateDbAndSave((prev) => ({
       ...prev,
       subjects: prev.subjects.filter((s) => s.id !== subjectId)
-    }));
-    deleteDocFromFirestore('subjects', subjectId).catch(() => {});
+    }), true);
+    await deleteDocFromFirestore('subjects', subjectId);
     logActivity(currentUser, 'Hapus Mapel', `Menghapus mapel ID: ${subjectId}`);
   };
 

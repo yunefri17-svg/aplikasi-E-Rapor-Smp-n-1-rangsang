@@ -108,5 +108,25 @@ service cloud.firestore {
     match /notifications/{notifId} {
       allow read, write: if true;
     }
+
+    // 22. formative_assessments (Kurikulum Merdeka 2025)
+    match /formative_assessments/{id} {
+      allow read, write: if true;
+    }
+
+    // 23. summative_assessments (Kurikulum Merdeka 2025)
+    match /summative_assessments/{id} {
+      allow read, write: if true;
+    }
+
+    // 24. kktp_configs (Kurikulum Merdeka 2025)
+    match /kktp_configs/{id} {
+      allow read, write: if true;
+    }
+
+    // 25. final_score_configs (Kurikulum Merdeka 2025)
+    match /final_score_configs/{id} {
+      allow read, write: if true;
+    }
   }
 }

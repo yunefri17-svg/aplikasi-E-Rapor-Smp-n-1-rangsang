@@ -470,9 +470,12 @@ export const syncHomeroomAssignment = (
   userId?: string
 ): AppDatabase => {
   const updatedDb = { ...db };
+  const classrooms = Array.isArray(db.classrooms) ? db.classrooms : [];
+  const teachers = Array.isArray(db.teachers) ? db.teachers : [];
+  const users = Array.isArray(db.users) ? db.users : [];
 
   // 1. Clear old classroom assignments for this teacher
-  updatedDb.classrooms = updatedDb.classrooms.map((cls) => {
+  updatedDb.classrooms = classrooms.map((cls) => {
     if (cls.homeroomTeacherId === teacherId && cls.id !== newClassId) {
       return { ...cls, homeroomTeacherId: '' };
     }
@@ -483,7 +486,7 @@ export const syncHomeroomAssignment = (
   });
 
   // 2. Update teacher record
-  updatedDb.teachers = updatedDb.teachers.map((t) => {
+  updatedDb.teachers = teachers.map((t) => {
     if (t.id === teacherId) {
       return { ...t, homeroomClassId: newClassId };
     }
@@ -492,7 +495,7 @@ export const syncHomeroomAssignment = (
 
   // 3. Update user record if provided
   if (userId) {
-    updatedDb.users = updatedDb.users.map((u) => {
+    updatedDb.users = users.map((u) => {
       if (u.id === userId) {
         return { ...u, teacherId, classId: newClassId };
       }
@@ -500,7 +503,7 @@ export const syncHomeroomAssignment = (
     });
   } else {
     // Also update any user with this teacherId
-    updatedDb.users = updatedDb.users.map((u) => {
+    updatedDb.users = users.map((u) => {
       if (u.teacherId === teacherId && u.role === 'walikelas') {
         return { ...u, classId: newClassId };
       }
@@ -533,13 +536,13 @@ export const partialPurgeMasterData = (db: AppDatabase): AppDatabase => {
   updatedDb.teachers = [];
   
   // 3. Reset classroom teacher assignments
-  updatedDb.classrooms = updatedDb.classrooms.map(c => ({
+  updatedDb.classrooms = (Array.isArray(db.classrooms) ? db.classrooms : []).map(c => ({
     ...c,
     homeroomTeacherId: ''
   }));
   
   // 4. Clear simulated staff users (keep admin and kepsek)
-  updatedDb.users = db.users.filter(u => 
+  updatedDb.users = (Array.isArray(db.users) ? db.users : []).filter(u => 
     u.role === 'admin' || u.role === 'kepsek' || !u.teacherId
   );
   
@@ -552,12 +555,17 @@ export const partialPurgeMasterData = (db: AppDatabase): AppDatabase => {
  */
 export const syncUsersWithTeachers = (db: AppDatabase): AppDatabase => {
   const updatedDb = { ...db };
-  const teacherMap = new Map(db.teachers.map((t) => [t.id, t]));
-  const teacherNipMap = new Map(db.teachers.filter((t) => t.nip && t.nip.trim()).map((t) => [t.nip.trim(), t]));
-  const teacherNameMap = new Map(db.teachers.map((t) => [t.name.toLowerCase().replace(/[^a-z0-9]/g, ''), t]));
+  const teachers = Array.isArray(db.teachers) ? db.teachers : [];
+  const classrooms = Array.isArray(db.classrooms) ? db.classrooms : [];
+  const users = Array.isArray(db.users) ? db.users : [];
+
+  const teacherMap = new Map(teachers.map((t) => [t.id, t]));
+  const teacherNipMap = new Map(teachers.filter((t) => t.nip && t.nip.trim()).map((t) => [t.nip.trim(), t]));
+  const teacherNameMap = new Map(teachers.map((t) => [t.name.toLowerCase().replace(/[^a-z0-9]/g, ''), t]));
 
   // 1. Remove users (guru/walikelas) whose corresponding teacher no longer exists in teachers table
-  updatedDb.users = db.users.filter((u) => {
+  updatedDb.users = users.filter((u) => {
+    if (!u) return false;
     // Always preserve administrator and headmaster accounts
     if (u.role === 'admin' || u.role === 'kepsek') return true;
 
@@ -571,7 +579,7 @@ export const syncUsersWithTeachers = (db: AppDatabase): AppDatabase => {
 
   // 2. Also ensure classrooms do not reference deleted homeroom teachers & are strictly sorted
   updatedDb.classrooms = sortClassrooms(
-    updatedDb.classrooms.map((c) => {
+    classrooms.map((c) => {
       if (c.homeroomTeacherId && !teacherMap.has(c.homeroomTeacherId)) {
         return { ...c, homeroomTeacherId: '' };
       }
@@ -580,8 +588,9 @@ export const syncUsersWithTeachers = (db: AppDatabase): AppDatabase => {
   );
 
   // 3. Add users for active teachers if missing
-  const existingUserTeacherIds = new Set(updatedDb.users.filter((u) => u.teacherId).map((u) => u.teacherId));
-  db.teachers.forEach((t) => {
+  const existingUserTeacherIds = new Set(updatedDb.users.filter((u) => u && u.teacherId).map((u) => u.teacherId));
+  teachers.forEach((t) => {
+    if (!t) return;
     if (!existingUserTeacherIds.has(t.id)) {
       updatedDb.users.push({
         id: `usr-${t.id}`,
@@ -598,6 +607,7 @@ export const syncUsersWithTeachers = (db: AppDatabase): AppDatabase => {
 
   // 4. Update existing user details (names, roles, classIds, NIPs)
   updatedDb.users = updatedDb.users.map((u) => {
+    if (!u) return u;
     if (u.role === 'admin' || u.role === 'kepsek') return u;
     const t =
       (u.teacherId ? teacherMap.get(u.teacherId) : null) ||
@@ -624,12 +634,17 @@ export const syncUsersWithTeachers = (db: AppDatabase): AppDatabase => {
  * and synchronizes names with active teachers, subjects, and classrooms.
  */
 export const sanitizeTeachingAssignments = (db: AppDatabase): AppDatabase => {
-  const teacherMap = new Map(db.teachers.map((t) => [t.id, t]));
-  const subjectMap = new Map(db.subjects.map((s) => [s.id, s]));
-  const classMap = new Map(db.classrooms.map((c) => [c.id, c]));
+  const teachers = Array.isArray(db.teachers) ? db.teachers : [];
+  const subjects = Array.isArray(db.subjects) ? db.subjects : [];
+  const classrooms = Array.isArray(db.classrooms) ? db.classrooms : [];
+  const assignments = Array.isArray(db.teachingAssignments) ? db.teachingAssignments : [];
 
-  const validAssignments = (db.teachingAssignments || []).filter((ta) => {
-    return teacherMap.has(ta.teacherId);
+  const teacherMap = new Map(teachers.map((t) => [t.id, t]));
+  const subjectMap = new Map(subjects.map((s) => [s.id, s]));
+  const classMap = new Map(classrooms.map((c) => [c.id, c]));
+
+  const validAssignments = assignments.filter((ta) => {
+    return ta && teacherMap.has(ta.teacherId);
   }).map((ta) => {
     const t = teacherMap.get(ta.teacherId);
     const s = subjectMap.get(ta.subjectId);
