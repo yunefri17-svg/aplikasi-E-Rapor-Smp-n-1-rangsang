@@ -37,6 +37,7 @@ import {
 import { TutWuriHandayaniLogo } from '../components/common/TutWuriHandayaniLogo';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface CetakRaporViewProps {
   school: SchoolProfile;
@@ -102,6 +103,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
   }
 
   const sortedClassrooms = sortClassrooms(classrooms);
+  const sortedSubjects = sortSubjects(subjects);
 
   const visibleClassrooms = isWaliKelas
     ? sortedClassrooms.filter((c) => c.id === currentUser.classId)
@@ -157,7 +159,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
   };
 
   // Check completeness for data verification notice
-  const missingSubjects = subjects.filter((sub) => !scoreLookup.has(sub.id));
+  const missingSubjects = sortedSubjects.filter((sub) => !scoreLookup.has(sub.id));
   const isDataComplete =
     currentStudent &&
     currentStudent.nisn &&
@@ -172,7 +174,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
       student: currentStudent,
       classroom,
       homeroomTeacher,
-      subjects,
+      subjects: sortedSubjects,
       scores: studentScores,
       attendance: studentAtt,
       extracurriculars,
@@ -214,7 +216,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
           classroom,
           students: classStudents,
           homeroomTeacher,
-          subjects,
+          subjects: sortedSubjects,
           scores,
           attendanceList,
           extracurriculars,
@@ -900,7 +902,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-300">
-                  {subjects.map((sub, idx) => {
+                  {sortedSubjects.map((sub, idx) => {
                     const sc = scoreLookup.get(sub.id);
                     const finalVal = sc?.finalScore !== undefined ? sc.finalScore : '-';
                     const highest = sc?.highestCompetenceDesc;

@@ -3,6 +3,7 @@ import { Classroom, Subject, Student, AssessmentScore, User } from '../types/era
 import { Table, CheckCircle2, AlertTriangle, FileSpreadsheet, Download, Printer, Lock } from 'lucide-react';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface RekapitulasiNilaiViewProps {
   classrooms: Classroom[];
@@ -46,6 +47,7 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
   }
 
   const sortedAllClassrooms = sortClassrooms(classrooms);
+  const sortedSubjects = sortSubjects(subjects);
 
   const visibleClassrooms = isWaliKelas
     ? sortedAllClassrooms.filter((c) => c.id === currentUser.classId)
@@ -104,9 +106,9 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
             <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
               <tr>
                 <th className="px-3 py-3 text-center border-r border-slate-200">No</th>
-                <th className="px-3 py-3 border-r border-slate-200">NISN</th>
+                <th className="px-3 py-3 border-r border-slate-200 w-28">NISN</th>
                 <th className="px-3 py-3 min-w-[150px] border-r border-slate-200">Nama Siswa</th>
-                {subjects.map((sub) => (
+                {sortedSubjects.map((sub) => (
                   <th
                     key={sub.id}
                     className="px-2 py-3 text-center font-mono border-r border-slate-200"
@@ -128,7 +130,7 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
                 let count = 0;
                 let hasRemedial = false;
 
-                subjects.forEach((s) => {
+                sortedSubjects.forEach((s) => {
                   const sc = stdMap.get(s.id);
                   if (sc && typeof sc.finalScore === 'number') {
                     sum += sc.finalScore;
@@ -150,7 +152,7 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
                     <td className="px-3 py-2.5 font-bold text-slate-800 border-r border-slate-100">
                       {std.name}
                     </td>
-                    {subjects.map((s) => {
+                    {sortedSubjects.map((s) => {
                       const sc = stdMap.get(s.id);
                       const val = sc?.finalScore;
                       return (
@@ -172,9 +174,9 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
                       {avg}
                     </td>
                     <td className="px-3 py-2.5 text-center">
-                      {count < subjects.length ? (
+                      {count < sortedSubjects.length ? (
                         <span className="text-[10px] text-amber-600 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                          Belum Lengkap ({count}/{subjects.length})
+                          Belum Lengkap ({count}/{sortedSubjects.length})
                         </span>
                       ) : hasRemedial ? (
                         <span className="text-[10px] text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200">

@@ -32,6 +32,7 @@ import { calculatePredicate, generateCompetenceDescriptions } from '../services/
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface InputNilaiViewProps {
   classrooms: Classroom[];
@@ -89,9 +90,9 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     const combinedIds = Array.from(new Set([...assignedSubIds, ...(currentTeacher.subjectsTaught || [])]));
     if (combinedIds.length > 0) {
       const filtered = subjects.filter((s) => combinedIds.includes(s.id));
-      if (filtered.length > 0) return filtered;
+      if (filtered.length > 0) return sortSubjects(filtered);
     }
-    return subjects;
+    return sortSubjects(subjects);
   }, [isAdmin, currentTeacher, teachingAssignments, subjects]);
 
   const [selectedSubject, setSelectedSubject] = useState<string>(() => {

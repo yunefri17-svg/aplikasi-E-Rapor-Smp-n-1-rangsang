@@ -11,6 +11,7 @@ import {
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
 import {
   Table,
   CheckCircle2,
@@ -73,7 +74,7 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
   const subjectSummaries = useMemo(() => {
     if (!selectedClassroom || classStudents.length === 0) return [];
 
-    return db.subjects.map((sub: Subject) => {
+    return sortSubjects(db.subjects).map((sub: Subject) => {
       // Find teacher who teaches this subject in this class
       const assignedTeacher = db.teachers.find(
         (t: Teacher) => t.subjectsTaught.includes(sub.id)

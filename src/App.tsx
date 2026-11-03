@@ -228,81 +228,49 @@ export default function App() {
         const updated = { ...prev };
 
         const mergeList = (key: keyof AppDatabase, incoming: any[] | undefined) => {
-          let currentList = ((prev[key] as any[]) || []).slice();
-          const removedForCollection = payload.removedDocIds?.[key as string] || [];
+          if (incoming === undefined) return;
+          const currentList = ((prev[key] as any[]) || []).slice();
 
-          // 1. Remove items that were deleted in Firestore
-          if (removedForCollection.length > 0) {
-            const removedSet = new Set(removedForCollection);
-            const initialLen = currentList.length;
-            currentList = currentList.filter(
-              (item) => item && item.id && !removedSet.has(item.id) && !removedSet.has(sanitizeDocId(item.id))
-            );
-            if (currentList.length !== initialLen) {
+          // Filter incoming by tombstone list so deleted items are never revived
+          const validIncoming = incoming.filter(
+            (item) => item && item.id && !isEntityDeleted(key as string, item.id)
+          );
+
+          if (key === 'classrooms') {
+            const sorted = sortClassrooms(validIncoming);
+            if (JSON.stringify(currentList) !== JSON.stringify(sorted)) {
+              (updated as any).classrooms = sorted;
               changed = true;
             }
+            return;
           }
 
-          if (incoming && incoming.length > 0) {
-            // Filter incoming by tombstone list so deleted items are never revived
-            const validIncoming = incoming.filter(
-              (item) => item && item.id && !isEntityDeleted(key as string, item.id)
-            );
-            const incomingMap = new Map(validIncoming.map((item) => [item.id, item]));
-
-            // Special cases for composite IDs or specific merging needs
-            if (key === 'finalScoreConfigs') {
-              if (!updated.finalScoreConfigs) updated.finalScoreConfigs = [];
-              validIncoming.forEach((fsc) => {
-                if (!fsc) return;
-                const idx = updated.finalScoreConfigs.findIndex(
-                  (c) => c && c.subjectId === fsc.subjectId && c.classId === fsc.classId
-                );
-                if (idx >= 0) {
-                  const existing = updated.finalScoreConfigs[idx];
-                  if (JSON.stringify(existing) !== JSON.stringify(fsc)) {
-                    updated.finalScoreConfigs[idx] = fsc;
-                    changed = true;
-                  }
-                } else {
-                  updated.finalScoreConfigs.push(fsc);
+          if (key === 'finalScoreConfigs') {
+            if (!updated.finalScoreConfigs) updated.finalScoreConfigs = [];
+            validIncoming.forEach((fsc) => {
+              if (!fsc) return;
+              const idx = updated.finalScoreConfigs.findIndex(
+                (c) => c && c.subjectId === fsc.subjectId && c.classId === fsc.classId
+              );
+              if (idx >= 0) {
+                if (JSON.stringify(updated.finalScoreConfigs[idx]) !== JSON.stringify(fsc)) {
+                  updated.finalScoreConfigs[idx] = fsc;
                   changed = true;
                 }
-              });
-              return;
-            }
-
-            // Standard ID-based merge:
-            // 2. Update existing items (and discard any locally marked as deleted)
-            const nextList = currentList
-              .filter((item) => item && item.id && !isEntityDeleted(key as string, item.id))
-              .map((item) => {
-                const cloudItem = incomingMap.get(item.id);
-                if (cloudItem && JSON.stringify(item) !== JSON.stringify(cloudItem)) {
-                  changed = true;
-                  return cloudItem;
-                }
-                return item;
-              });
-
-            // 3. Add new items ONLY if not already in list and not marked as deleted
-            validIncoming.forEach((item) => {
-              if (
-                item &&
-                item.id &&
-                !isEntityDeleted(key as string, item.id) &&
-                !nextList.some((existing) => existing && existing.id === item.id)
-              ) {
-                nextList.push(item);
+              } else {
+                updated.finalScoreConfigs.push(fsc);
                 changed = true;
               }
             });
+            return;
+          }
 
-            if (changed) {
-              (updated as any)[key] = nextList;
-            }
-          } else if (removedForCollection.length > 0 && changed) {
-            (updated as any)[key] = currentList;
+          if (validIncoming.length === 0 && currentList.length === 0) return;
+
+          // For all other collections, Cloud Firestore is the authority
+          if (JSON.stringify(currentList) !== JSON.stringify(validIncoming)) {
+            (updated as any)[key] = validIncoming;
+            changed = true;
           }
         };
 
@@ -393,55 +361,29 @@ export default function App() {
               const merged: AppDatabase = {
                 ...prev,
                 schoolProfile: remoteData.schoolProfile || prev.schoolProfile,
-                students: cleanRemoteStudents.length > 0 ? cleanRemoteStudents : prev.students.filter(s => !isEntityDeleted('students', s.id)),
-                teachers: cleanRemoteTeachers.length > 0 ? cleanRemoteTeachers : prev.teachers.filter(t => !isEntityDeleted('teachers', t.id)),
+                students: remoteData.students !== undefined ? cleanRemoteStudents : prev.students.filter(s => !isEntityDeleted('students', s.id)),
+                teachers: remoteData.teachers !== undefined ? cleanRemoteTeachers : prev.teachers.filter(t => !isEntityDeleted('teachers', t.id)),
                 classrooms: sortClassrooms(
-                  cleanRemoteClassrooms.length > 0 ? cleanRemoteClassrooms : prev.classrooms.filter(c => !isEntityDeleted('classrooms', c.id))
+                  remoteData.classrooms !== undefined ? cleanRemoteClassrooms : prev.classrooms.filter(c => !isEntityDeleted('classrooms', c.id))
                 ),
-                subjects: cleanRemoteSubjects.length > 0 ? cleanRemoteSubjects : prev.subjects.filter(sub => !isEntityDeleted('subjects', sub.id)),
+                subjects: remoteData.subjects !== undefined ? cleanRemoteSubjects : prev.subjects.filter(sub => !isEntityDeleted('subjects', sub.id)),
                 curricula: remoteData.curricula && remoteData.curricula.length > 0 ? remoteData.curricula : prev.curricula,
                 learningObjectives: remoteData.learningObjectives && remoteData.learningObjectives.length > 0 ? remoteData.learningObjectives : prev.learningObjectives,
-                scores: (() => {
-                  const remoteScores = remoteData.scores || [];
-                  const localScores = prev.scores || [];
-                  const scoreKey = (s: AssessmentScore) =>
-                    `${s.studentId}-${s.subjectId}-${(s.academicYear || '').replace(/\//g, '_')}-${s.semester}`;
-                  const scoreMap = new Map();
-                  // In initial sync, Remote (Cloud) takes precedence to ensure other devices' work is seen
-                  localScores.forEach((s) => scoreMap.set(scoreKey(s), s));
-                  remoteScores.forEach((s) => scoreMap.set(scoreKey(s), s)); 
-                  return Array.from(scoreMap.values());
-                })(),
-                attendance: (() => {
-                  const remoteAtt = remoteData.attendance || [];
-                  const localAtt = prev.attendance || [];
-                  const attKey = (a: Attendance) => `${a.studentId}-${(a.academicYear || '').replace(/\//g, '_')}-${a.semester}`;
-                  const attMap = new Map();
-                  localAtt.forEach((a) => attMap.set(attKey(a), a));
-                  remoteAtt.forEach((a) => attMap.set(attKey(a), a));
-                  return Array.from(attMap.values());
-                })(),
-                homeroomNotes: (() => {
-                  const remoteNotes = remoteData.homeroomNotes || [];
-                  const localNotes = prev.homeroomNotes || [];
-                  const noteKey = (n: HomeroomNote) => `${n.studentId}-${(n.academicYear || '').replace(/\//g, '_')}-${n.semester}`;
-                  const noteMap = new Map();
-                  localNotes.forEach((n) => noteMap.set(noteKey(n), n));
-                  remoteNotes.forEach((n) => noteMap.set(noteKey(n), n));
-                  return Array.from(noteMap.values());
-                })(),
-                teachingAssignments: (remoteData.teachingAssignments || prev.teachingAssignments || []).filter(
+                scores: remoteData.scores !== undefined ? remoteData.scores : prev.scores,
+                attendance: remoteData.attendance !== undefined ? remoteData.attendance : prev.attendance,
+                homeroomNotes: remoteData.homeroomNotes !== undefined ? remoteData.homeroomNotes : prev.homeroomNotes,
+                teachingAssignments: (remoteData.teachingAssignments !== undefined ? remoteData.teachingAssignments : (prev.teachingAssignments || [])).filter(
                   (ta) => ta && !isEntityDeleted('teaching_assignments', ta.id) && !isEntityDeleted('teachers', ta.teacherId)
                 ),
-                users: (remoteData.users || prev.users || []).filter(
+                users: (remoteData.users !== undefined ? remoteData.users : (prev.users || [])).filter(
                   (u) => u && !isEntityDeleted('users', u.id) && (!u.teacherId || !isEntityDeleted('teachers', u.teacherId))
                 ),
-                formativeAssessments: remoteData.formativeAssessments || prev.formativeAssessments,
-                summativeAssessments: remoteData.summativeAssessments || prev.summativeAssessments,
-                kktpConfigs: remoteData.kktpConfigs || prev.kktpConfigs,
-                finalScoreConfigs: remoteData.finalScoreConfigs || prev.finalScoreConfigs,
-                extracurriculars: remoteData.extracurriculars || prev.extracurriculars,
-                studentExtracurriculars: remoteData.studentExtracurriculars || prev.studentExtracurriculars
+                formativeAssessments: remoteData.formativeAssessments !== undefined ? remoteData.formativeAssessments : prev.formativeAssessments,
+                summativeAssessments: remoteData.summativeAssessments !== undefined ? remoteData.summativeAssessments : prev.summativeAssessments,
+                kktpConfigs: remoteData.kktpConfigs !== undefined ? remoteData.kktpConfigs : prev.kktpConfigs,
+                finalScoreConfigs: remoteData.finalScoreConfigs !== undefined ? remoteData.finalScoreConfigs : prev.finalScoreConfigs,
+                extracurriculars: remoteData.extracurriculars !== undefined ? remoteData.extracurriculars : prev.extracurriculars,
+                studentExtracurriculars: remoteData.studentExtracurriculars !== undefined ? remoteData.studentExtracurriculars : prev.studentExtracurriculars
               };
               const cleaned = sanitizeTeachingAssignments(syncUsersWithTeachers(merged));
 
@@ -1022,7 +964,9 @@ export default function App() {
   };
 
   const handleResetDatabase = () => {
+    localStorage.removeItem('erapor_smpn1rangsang_db_v3');
     localStorage.removeItem('erapor_smpn1rangsang_db_v1');
+    localStorage.removeItem('erapor_deleted_entity_ids_v1');
     const freshDb = loadDatabase();
     setDb(freshDb);
     logActivity(currentUser, 'Reset Database', 'Mengembalikan database ke konfigurasi awal SMP Negeri 1 Rangsang.');

@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Classroom, Subject, AssessmentScore } from '../types/erapor';
+import { sortSubjects } from '../utils/subjectSort';
 
 // 1. Export Students to Excel
 export const exportStudentsToExcel = (
@@ -200,6 +201,8 @@ export const exportLegerToExcel = (
     }
   });
 
+  const sortedSubjects = sortSubjects(subjects);
+
   // Calculate student totals & ranking
   const studentRows = students.map((std, idx) => {
     const sMap = scoreMap.get(std.id) || new Map();
@@ -214,7 +217,7 @@ export const exportLegerToExcel = (
       JK: std.gender
     };
 
-    subjects.forEach((sb) => {
+    sortedSubjects.forEach((sb) => {
       const score = sMap.get(sb.id) ?? '-';
       rowObj[sb.code] = score;
       if (typeof score === 'number') {

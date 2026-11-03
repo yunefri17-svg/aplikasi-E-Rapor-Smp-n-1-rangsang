@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Subject, User } from '../types/erapor';
 import { BookMarked, Plus, Edit, Trash2, X, Check, Layers, Award } from 'lucide-react';
 
+import { sortSubjects } from '../utils/subjectSort';
+
 interface DataMapelViewProps {
   subjects: Subject[];
   onSaveSubject: (subject: Subject) => void;
@@ -45,7 +47,7 @@ export const DataMapelView: React.FC<DataMapelViewProps> = ({
     }
   };
 
-  const sortedSubjects = [...subjects].sort((a, b) => a.orderIndex - b.orderIndex);
+  const sortedSubjects = sortSubjects(subjects);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">

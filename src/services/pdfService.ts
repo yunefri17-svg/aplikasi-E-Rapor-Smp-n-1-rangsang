@@ -13,6 +13,7 @@ import {
   Teacher
 } from '../types/erapor';
 import { getTutWuriHandayaniDataUrl } from '../components/common/TutWuriHandayaniLogo';
+import { sortSubjects } from '../utils/subjectSort';
 
 export interface ReportCardExportOptions {
   school: SchoolProfile;
@@ -312,6 +313,7 @@ export const buildReportContentPages = (
     semester
   } = options;
 
+  const sortedSubjects = sortSubjects(subjects);
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Header / Kop Sekolah
@@ -383,7 +385,7 @@ export const buildReportContentPages = (
 
   // Subject Grades Table
   const scoreLookup = new Map(scores.map((sc) => [sc.subjectId, sc]));
-  const tableRows = subjects.map((sub, idx) => {
+  const tableRows = sortedSubjects.map((sub, idx) => {
     const sc = scoreLookup.get(sub.id);
     const finalVal = sc?.finalScore !== undefined ? String(sc.finalScore) : '-';
     let competenceText = '';
@@ -798,14 +800,15 @@ export const generateLegerPDF = (
     }
   });
 
-  const headers = ['No', 'NISN', 'Nama Siswa', 'JK', ...subjects.map((s) => s.code), 'Jml', 'Rata', 'Rank'];
+  const sortedSubjects = sortSubjects(subjects);
+  const headers = ['No', 'NISN', 'Nama Siswa', 'JK', ...sortedSubjects.map((s) => s.code), 'Jml', 'Rata', 'Rank'];
 
   const rowsData = students.map((std, idx) => {
     const sMap = scoreMap.get(std.id) || new Map();
     let total = 0;
     let count = 0;
 
-    const subjectScores = subjects.map((s) => {
+    const subjectScores = sortedSubjects.map((s) => {
       const val = sMap.get(s.id);
       if (typeof val === 'number') {
         total += val;

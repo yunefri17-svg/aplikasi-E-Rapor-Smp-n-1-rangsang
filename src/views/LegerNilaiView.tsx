@@ -5,6 +5,7 @@ import { exportLegerToExcel } from '../services/excelService';
 import { generateLegerPDF } from '../services/pdfService';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface LegerNilaiViewProps {
   school: SchoolProfile;
@@ -50,6 +51,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   }
 
   const sortedAllClassrooms = sortClassrooms(classrooms);
+  const sortedSubjects = sortSubjects(subjects);
 
   const visibleClassrooms = isWaliKelas
     ? sortedAllClassrooms.filter((c) => c.id === currentUser.classId)
@@ -73,7 +75,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
     let total = 0;
     let count = 0;
 
-    subjects.forEach((s) => {
+    sortedSubjects.forEach((s) => {
       const val = sMap.get(s.id);
       if (typeof val === 'number') {
         total += val;
@@ -99,11 +101,11 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   });
 
   const handleExportExcel = () => {
-    exportLegerToExcel(classroom, classStudents, subjects, scores, academicYear, semester);
+    exportLegerToExcel(classroom, classStudents, sortedSubjects, scores, academicYear, semester);
   };
 
   const handleExportPDF = () => {
-    generateLegerPDF(classroom, classStudents, subjects, scores, school, academicYear, semester);
+    generateLegerPDF(classroom, classStudents, sortedSubjects, scores, school, academicYear, semester);
   };
 
   const handlePrint = () => {
@@ -172,7 +174,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
                 <th className="px-3 py-3 border-r border-slate-200 w-28">NISN</th>
                 <th className="px-3 py-3 min-w-[160px] border-r border-slate-200">Nama Siswa</th>
                 <th className="px-2 py-3 text-center border-r border-slate-200 w-10">JK</th>
-                {subjects.map((sub) => (
+                {sortedSubjects.map((sub) => (
                   <th
                     key={sub.id}
                     className="px-2 py-3 text-center font-mono text-[11px] border-r border-slate-200"
@@ -213,7 +215,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
                     </td>
 
                     {/* Subject scores */}
-                    {subjects.map((sub) => {
+                    {sortedSubjects.map((sub) => {
                       const val = sMap.get(sub.id);
                       return (
                         <td

@@ -136,15 +136,44 @@ export function sanitizeDocId(id: string): string {
   return String(id).replace(/[\/\s#\[\]*?]/g, '_');
 }
 
-// Tombstone / Deleted IDs tracker to prevent resurrection of deleted entities
+// Tombstone / Deleted IDs tracker to prevent resurrection of deleted entities across all devices
 const DELETED_ENTITIES_KEY = 'erapor_deleted_entity_ids_v1';
+let inMemoryTombstones: Record<string, string[]> = {};
 
 export function getDeletedEntityIds(): Record<string, string[]> {
   try {
     const raw = localStorage.getItem(DELETED_ENTITIES_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const local = raw ? JSON.parse(raw) : {};
+    const merged: Record<string, string[]> = { ...local };
+    Object.keys(inMemoryTombstones).forEach((k) => {
+      merged[k] = Array.from(new Set([...(merged[k] || []), ...(inMemoryTombstones[k] || [])]));
+    });
+    return merged;
   } catch {
-    return {};
+    return inMemoryTombstones;
+  }
+}
+
+export function updateTombstonesFromCloud(cloudTombstones: Record<string, string[]>): void {
+  if (!cloudTombstones || typeof cloudTombstones !== 'object') return;
+  const current = getDeletedEntityIds();
+  let changed = false;
+  Object.keys(cloudTombstones).forEach((coll) => {
+    const incomingIds = Array.isArray(cloudTombstones[coll]) ? cloudTombstones[coll] : [];
+    if (!current[coll]) current[coll] = [];
+    incomingIds.forEach((id) => {
+      const clean = String(id);
+      if (!current[coll].includes(clean)) {
+        current[coll].push(clean);
+        changed = true;
+      }
+    });
+  });
+  inMemoryTombstones = current;
+  if (changed) {
+    try {
+      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(current));
+    } catch {}
   }
 }
 
@@ -158,8 +187,18 @@ export function addDeletedEntityId(collectionName: string, id: string): void {
     const cleanId = String(id);
     if (!map[collectionName].includes(cleanId)) {
       map[collectionName].push(cleanId);
-      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
     }
+    inMemoryTombstones = map;
+    try {
+      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
+    } catch {}
+
+    // Asynchronously push to Cloud Firestore tombstones document so all other devices receive it
+    setDoc(
+      doc(db, 'application_settings', 'tombstones'),
+      { [collectionName]: map[collectionName] },
+      { merge: true }
+    ).catch(() => {});
   } catch {}
 }
 
@@ -183,7 +222,15 @@ export function removeDeletedEntityId(collectionName: string, id: string): void 
     if (map[collectionName]) {
       const cleanId = String(id);
       map[collectionName] = map[collectionName].filter(x => x !== cleanId && x !== sanitizeDocId(cleanId));
-      localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
+      inMemoryTombstones = map;
+      try {
+        localStorage.setItem(DELETED_ENTITIES_KEY, JSON.stringify(map));
+      } catch {}
+      setDoc(
+        doc(db, 'application_settings', 'tombstones'),
+        { [collectionName]: map[collectionName] },
+        { merge: true }
+      ).catch(() => {});
     }
   } catch {}
 }
@@ -650,6 +697,7 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
 
     const [
       schoolDoc,
+      tombstonesDoc,
       studentsSnap,
       teachersSnap,
       classroomsSnap,
@@ -669,6 +717,7 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       finalConfigSnap
     ] = await Promise.all([
       getDoc(doc(db, 'schools', 'smpn1rangsang')),
+      getDoc(doc(db, 'application_settings', 'tombstones')).catch(() => null),
       getDocs(collection(db, 'students')),
       getDocs(collection(db, 'teachers')),
       getDocs(collection(db, 'classrooms')),
@@ -687,6 +736,10 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'kktp_configs')),
       getDocs(collection(db, 'final_score_configs'))
     ]);
+
+    if (tombstonesDoc && (tombstonesDoc as any).exists && (tombstonesDoc as any).exists()) {
+      updateTombstonesFromCloud((tombstonesDoc as any).data() as Record<string, string[]>);
+    }
 
     const hasAnyCloudData = 
       schoolDoc.exists() || 
@@ -713,23 +766,23 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
 
     return {
       ...(schoolDoc.exists() ? { schoolProfile: schoolDoc.data() as SchoolProfile } : {}),
-      ...(studentsSnap.empty ? {} : { students: studentsSnap.docs.map((d) => d.data() as Student) }),
-      ...(teachersSnap.empty ? {} : { teachers: teachersSnap.docs.map((d) => d.data() as Teacher) }),
-      ...(classroomsSnap.empty ? {} : { classrooms: sortClassrooms(classroomsSnap.docs.map((d) => d.data() as Classroom)) }),
-      ...(subjectsSnap.empty ? {} : { subjects: subjectsSnap.docs.map((d) => d.data() as Subject) }),
-      ...(scoresSnap.empty ? {} : { scores: scoresSnap.docs.map((d) => d.data() as AssessmentScore) }),
-      ...(attendanceSnap.empty ? {} : { attendance: attendanceSnap.docs.map((d) => d.data() as Attendance) }),
-      ...(notesSnap.empty ? {} : { homeroomNotes: notesSnap.docs.map((d) => d.data() as HomeroomNote) }),
-      ...(ekskulSnap.empty ? {} : { extracurriculars: ekskulSnap.docs.map((d) => d.data() as Extracurricular) }),
-      ...(studentEkskulSnap.empty ? {} : { studentExtracurriculars: studentEkskulSnap.docs.map((d) => d.data() as StudentExtracurricular) }),
-      ...(curriculaSnap.empty ? {} : { curricula: curriculaSnap.docs.map((d) => d.data() as Curriculum) }),
-      ...(tpsSnap.empty ? {} : { learningObjectives: tpsSnap.docs.map((d) => d.data() as LearningObjective) }),
-      ...(usersSnap.empty ? {} : { users: usersSnap.docs.map((d) => d.data() as User) }),
-      ...(teachingAssignmentsSnap.empty ? {} : { teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment) }),
-      ...(formativeSnap.empty ? {} : { formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment) }),
-      ...(summativeSnap.empty ? {} : { summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment) }),
-      ...(kktpSnap.empty ? {} : { kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig) }),
-      ...(finalConfigSnap.empty ? {} : { finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig) })
+      students: studentsSnap.docs.map((d) => d.data() as Student),
+      teachers: teachersSnap.docs.map((d) => d.data() as Teacher),
+      classrooms: sortClassrooms(classroomsSnap.docs.map((d) => d.data() as Classroom)),
+      subjects: subjectsSnap.docs.map((d) => d.data() as Subject),
+      scores: scoresSnap.docs.map((d) => d.data() as AssessmentScore),
+      attendance: attendanceSnap.docs.map((d) => d.data() as Attendance),
+      homeroomNotes: notesSnap.docs.map((d) => d.data() as HomeroomNote),
+      extracurriculars: ekskulSnap.docs.map((d) => d.data() as Extracurricular),
+      studentExtracurriculars: studentEkskulSnap.docs.map((d) => d.data() as StudentExtracurricular),
+      curricula: curriculaSnap.docs.map((d) => d.data() as Curriculum),
+      learningObjectives: tpsSnap.docs.map((d) => d.data() as LearningObjective),
+      users: usersSnap.docs.map((d) => d.data() as User),
+      teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment),
+      formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment),
+      summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
+      kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
+      finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig)
     };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
@@ -876,7 +929,12 @@ export function listenToFirestoreRealtime(
     genericListener('homeroom_notes', 'homeroomNotes'),
     genericListener('schools', 'schoolProfile'),
     genericListener('extracurriculars', 'extracurriculars'),
-    genericListener('student_extracurriculars', 'studentExtracurriculars')
+    genericListener('student_extracurriculars', 'studentExtracurriculars'),
+    onSnapshot(doc(db, 'application_settings', 'tombstones'), (snap) => {
+      if (snap.exists()) {
+        updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
+      }
+    })
   ];
 
   return () => {

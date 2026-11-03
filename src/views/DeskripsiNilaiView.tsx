@@ -5,6 +5,7 @@ import { SubjectDescriptionBank, getAutomaticDescription, defaultDescriptionBank
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface DeskripsiNilaiViewProps {
   classrooms: Classroom[];
@@ -63,9 +64,9 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
     const combinedIds = Array.from(new Set([...assignedSubIds, ...(currentTeacher.subjectsTaught || [])]));
     if (combinedIds.length > 0) {
       const filtered = subjects.filter((s) => combinedIds.includes(s.id));
-      if (filtered.length > 0) return filtered;
+      if (filtered.length > 0) return sortSubjects(filtered);
     }
-    return subjects;
+    return sortSubjects(subjects);
   }, [isAdmin, currentTeacher, teachingAssignments, subjects]);
 
   const [selectedSubject, setSelectedSubject] = useState<string>(
@@ -319,7 +320,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
               onChange={(e) => setSelectedSubject(e.target.value)}
               className="px-3 py-2 rounded-lg border border-slate-300 font-bold bg-white text-slate-800"
             >
-              {subjects.map((s) => (
+              {sortSubjects(subjects).map((s) => (
                 <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
               ))}
             </select>
@@ -433,7 +434,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
                 onChange={(e) => setBankSubId(e.target.value)}
                 className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold bg-white text-slate-900"
               >
-                {subjects.map((s) => (
+                {sortSubjects(subjects).map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
