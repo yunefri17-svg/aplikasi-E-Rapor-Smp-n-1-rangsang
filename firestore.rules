@@ -3,130 +3,159 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 1. schools
+    // Global helper: ensure request is authenticated via Firebase Authentication
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // 1. schools (Profil Sekolah)
     match /schools/{schoolId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 2. users
+    // 2. users (Akun Pengguna & Hak Akses)
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 3. teachers
+    // 3. teachers (Data Guru & GTK)
     match /teachers/{teacherId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 4. students
+    // 4. students (Data Siswa)
     match /students/{studentId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 5. classrooms
+    // 5. classrooms (Rombel Belajar)
     match /classrooms/{classId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 6. class_members
     match /class_members/{memberId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 7. academic_years
     match /academic_years/{yearId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 8. semesters
     match /semesters/{semesterId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 9. subjects
+    // 9. subjects (Mata Pelajaran)
     match /subjects/{subjectId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 10. teaching_assignments
+    // 10. teaching_assignments (Penugasan Mengajar)
     match /teaching_assignments/{assignmentId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 11. curricula
+    // 11. curricula (Kurikulum)
     match /curricula/{curriculumId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 12. assessments
+    // 12. assessments (Tujuan Pembelajaran / TP)
     match /assessments/{assessmentId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 13. assessment_scores
+    // 13. assessment_scores (Nilai Siswa)
     match /assessment_scores/{scoreId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 14. attendance
+    // 14. attendance (Absensi)
     match /attendance/{attendanceId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 15. extracurriculars
+    // 15. extracurriculars (Master Ekskul)
     match /extracurriculars/{ekskulId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 16. student_extracurriculars
+    // 16. student_extracurriculars (Nilai Ekskul Siswa)
     match /student_extracurriculars/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 17. homeroom_notes
+    // 17. homeroom_notes (Catatan Wali Kelas & Kenaikan)
     match /homeroom_notes/{noteId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 18. report_cards
     match /report_cards/{reportId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 19. audit_logs
+    // 19. audit_logs (Jejak Keamanan: dapat dibaca & dibuat, tetapi TIDAK DAPAT diubah atau dihapus)
     match /audit_logs/{logId} {
-      allow read, create: if true;
+      allow read, create: if isSignedIn();
       allow update, delete: if false;
     }
 
-    // 20. application_settings
+    // 20. application_settings (Pengaturan Aplikasi)
     match /application_settings/{settingId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
-    // 21. notifications
+    // 21. notifications (Notifikasi Sinkronisasi)
     match /notifications/{notifId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 22. formative_assessments (Kurikulum Merdeka 2025)
     match /formative_assessments/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 23. summative_assessments (Kurikulum Merdeka 2025)
     match /summative_assessments/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 24. kktp_configs (Kurikulum Merdeka 2025)
     match /kktp_configs/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     // 25. final_score_configs (Kurikulum Merdeka 2025)
     match /final_score_configs/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
   }
 }

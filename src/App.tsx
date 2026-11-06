@@ -88,6 +88,9 @@ import { ImporEksporDapodikView } from './views/ImporEksporDapodikView';
 import { ManajemenWaliKelasView } from './views/ManajemenWaliKelasView';
 import { ManajemenPenggunaView } from './views/ManajemenPenggunaView';
 import { PengaturanAplikasiView } from './views/PengaturanAplikasiView';
+import { LoginView } from './views/LoginView';
+import { getSavedSessionUserId, logoutUser } from './services/authService';
+import { SecurityAccessDenied } from './components/SecurityAccessDenied';
 
 // Kurikulum Merdeka 2025 Views
 import { KKTPConfigView } from './views/KKTPConfigView';
@@ -113,16 +116,24 @@ export default function App() {
   const [targetPrintStudentId, setTargetPrintStudentId] = useState<string | undefined>(undefined);
   const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
 
-  // Current active user
-  const [currentUser, setCurrentUser] = useState<User>(() => {
+  // Authentication & Active User Session
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    const savedUserId = getSavedSessionUserId();
+    if (!savedUserId) return false;
+    const loaded = loadDatabase();
+    const found = (loaded.users || []).find((u) => u.id === savedUserId);
+    return Boolean(found && found.status !== 'inactive');
+  });
+
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
-      const savedUserId = localStorage.getItem('erapor_active_user_id');
+      const savedUserId = getSavedSessionUserId();
       if (savedUserId) {
         const found = db.users.find((u) => u.id === savedUserId);
-        if (found) return found;
+        if (found && found.status !== 'inactive') return found;
       }
     } catch {}
-    return db.users.find((u) => u.role === 'admin') || db.users[0];
+    return null;
   });
 
   // Dual duty mode (Wali Kelas vs Guru Mata Pelajaran)
@@ -131,14 +142,47 @@ export default function App() {
       const savedDuty = localStorage.getItem('erapor_active_duty_mode');
       if (savedDuty === 'walikelas' || savedDuty === 'guru') return savedDuty as DutyMode;
     } catch {}
-    return currentUser.role === 'walikelas' ? 'walikelas' : 'guru';
+    return currentUser?.role === 'walikelas' ? 'walikelas' : 'guru';
   });
+
+  const handleLoginSuccess = (user: User, semesterChoice?: string) => {
+    setCurrentUser(user);
+    setIsAuthenticated(true);
+    const newDuty: DutyMode = user.role === 'walikelas' ? 'walikelas' : 'guru';
+    setDutyMode(newDuty);
+    try {
+      localStorage.setItem('erapor_active_duty_mode', newDuty);
+    } catch {}
+    setActiveMenu('dashboard');
+
+    if (semesterChoice) {
+      const parts = semesterChoice.split(' ');
+      const yr = parts[0];
+      const sem = parts[1] as 'Ganjil' | 'Genap';
+      if (yr && (sem === 'Ganjil' || sem === 'Genap')) {
+        if (db.schoolProfile.activeAcademicYear !== yr || db.schoolProfile.activeSemester !== sem) {
+          updateDbAndSave((prev) => ({
+            ...prev,
+            schoolProfile: {
+              ...prev.schoolProfile,
+              activeAcademicYear: yr,
+              activeSemester: sem
+            }
+          }));
+        }
+      }
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser(currentUser);
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    setActiveMenu('dashboard');
+  };
 
   const handleSwitchUser = (user: User) => {
     setCurrentUser(user);
-    try {
-      localStorage.setItem('erapor_active_user_id', user.id);
-    } catch {}
     const newDuty: DutyMode = user.role === 'walikelas' ? 'walikelas' : 'guru';
     setDutyMode(newDuty);
     try {
@@ -162,6 +206,7 @@ export default function App() {
 
   // Find associated teacher profile for current user
   const currentTeacher = React.useMemo(() => {
+    if (!currentUser) return undefined;
     return db.teachers.find(
       (t) =>
         (currentUser.teacherId && t.id === currentUser.teacherId) ||
@@ -172,7 +217,7 @@ export default function App() {
     );
   }, [db.teachers, currentUser]);
 
-  const hasHomeroomDuty = Boolean(currentUser.classId || currentTeacher?.isHomeroom);
+  const hasHomeroomDuty = Boolean(currentUser?.classId || currentTeacher?.isHomeroom);
   const hasTeachingDuties = React.useMemo(() => {
     if (!currentTeacher) return false;
     const hasAssignments = (db.teachingAssignments || []).some(
@@ -183,16 +228,26 @@ export default function App() {
   }, [currentTeacher, db.teachingAssignments]);
 
   const canSwitchDutyMode = Boolean(
-    hasHomeroomDuty && hasTeachingDuties && currentUser.role !== 'admin' && currentUser.role !== 'kepsek'
+    hasHomeroomDuty && hasTeachingDuties && currentUser && currentUser.role !== 'admin' && currentUser.role !== 'kepsek'
   );
 
   const homeroomClass = React.useMemo(() => {
+    if (!currentUser) return undefined;
     const cId = currentUser.classId || currentTeacher?.homeroomClassId;
     return db.classrooms.find((c) => c.id === cId);
   }, [currentUser, currentTeacher, db.classrooms]);
 
   // Effective User with active role depending on current duty mode
   const effectiveUser: User = React.useMemo(() => {
+    if (!currentUser) {
+      return db.users[0] || {
+        id: 'guest',
+        username: 'guest',
+        name: 'Tamu',
+        role: 'guru',
+        status: 'inactive'
+      };
+    }
     let base = currentUser;
     // Auto-link teacherId if missing but teacher found by name/nip
     if (!base.teacherId && currentTeacher) {
@@ -205,7 +260,7 @@ export default function App() {
       role: dutyMode,
       activeDutyMode: dutyMode
     };
-  }, [canSwitchDutyMode, currentUser, dutyMode, currentTeacher]);
+  }, [canSwitchDutyMode, currentUser, dutyMode, currentTeacher, db.users]);
 
   // Modal for quick academic year switch
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
@@ -398,10 +453,11 @@ export default function App() {
               }
 
               // Update currentUser if the user account was deleted
-              setCurrentUser((curr: User) => {
+              setCurrentUser((curr: User | null) => {
+                if (!curr) return null;
                 const exists = cleaned.users.some((u: User) => u.id === curr.id);
                 if (!exists) {
-                  return cleaned.users.find((u: User) => u.role === 'admin') || cleaned.users[0] || curr;
+                  return cleaned.users.find((u: User) => u.role === 'admin') || cleaned.users[0] || null;
                 }
                 return curr;
               });
@@ -456,7 +512,7 @@ export default function App() {
       if (remoteData) {
         handleApplyRemoteData(remoteData);
       }
-      await syncAllToFirestore(db, currentUser);
+      await syncAllToFirestore(db, currentUser || undefined);
     } catch (err) {
       console.error('Manual sync failed:', err);
     }
@@ -534,11 +590,12 @@ export default function App() {
     });
 
     // Check if the currently logged-in user is the one being deleted
-    const isCurrentDeleted = 
+    const isCurrentDeleted = currentUser ? (
       currentUser.teacherId === teacherId ||
       usersToDelete.some((u) => u.id === currentUser.id) ||
       (teacherToDelete && currentUser.nip && currentUser.nip === teacherToDelete.nip) ||
-      (teacherToDelete && currentUser.name.toLowerCase().trim() === teacherToDelete.name.toLowerCase().trim());
+      (teacherToDelete && currentUser.name.toLowerCase().trim() === teacherToDelete.name.toLowerCase().trim())
+    ) : false;
 
     if (isCurrentDeleted) {
       const fallbackAdmin = db.users.find((u) => u.role === 'admin' && !usersToDelete.some((del) => del.id === u.id)) || {
@@ -843,7 +900,7 @@ export default function App() {
   };
 
   const handleDeleteUser = (userId: string) => {
-    if (currentUser.id === userId) {
+    if (currentUser && currentUser.id === userId) {
       const fallbackAdmin = db.users.find((u) => u.role === 'admin' && u.id !== userId) || {
         id: 'usr-admin-1',
         username: 'admin',
@@ -983,7 +1040,7 @@ export default function App() {
       await wipeFirestoreMasterCollections();
       
       // 3. Sync the remaining configuration (School Profile, Classrooms, etc.) back to cloud
-      await syncAllToFirestore(purged, currentUser);
+      await syncAllToFirestore(purged, currentUser || undefined);
       
       logActivity(currentUser, 'Pembersihan Data Master', 'Mengosongkan seluruh data siswa, guru, dan akun guru untuk mulai baru.');
     } catch (e: any) {
@@ -1062,6 +1119,17 @@ export default function App() {
     setActiveMenu('cetak-rapor');
   };
 
+  // If user is not authenticated or not logged in, show official Login View
+  if (!isAuthenticated || !currentUser) {
+    return (
+      <LoginView
+        school={db.schoolProfile}
+        allUsers={db.users}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 flex font-sans text-slate-800 antialiased selection:bg-blue-600 selection:text-white">
       {/* Sidebar navigation */}
@@ -1094,6 +1162,7 @@ export default function App() {
           cloudSyncState={cloudSyncState}
           onTriggerSync={handleManualSyncToCloud}
           onReconnect={handleReconnect}
+          onLogout={handleLogout}
           activeDutyMode={dutyMode}
           onToggleDutyMode={setDutyMode}
           canSwitchDutyMode={canSwitchDutyMode}
@@ -1120,22 +1189,36 @@ export default function App() {
           {activeMenu === 'data-referensi' && <DataReferensiView />}
 
           {activeMenu === 'data-sekolah' && (
-            <DataSekolahView
-              school={db.schoolProfile}
-              onSave={handleSaveSchool}
-              currentUser={effectiveUser}
-            />
+            effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
+              <DataSekolahView
+                school={db.schoolProfile}
+                onSave={handleSaveSchool}
+                currentUser={effectiveUser}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Data Identitas Sekolah hanya dapat diakses oleh Administrator dan Kepala Sekolah."
+              />
+            )
           )}
 
           {activeMenu === 'data-guru' && (
-            <DataGuruView
-              teachers={db.teachers}
-              subjects={db.subjects}
-              classrooms={db.classrooms}
-              onSaveTeacher={handleSaveTeacher}
-              onDeleteTeacher={handleDeleteTeacher}
-              currentUser={effectiveUser}
-            />
+            effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
+              <DataGuruView
+                teachers={db.teachers}
+                subjects={db.subjects}
+                classrooms={db.classrooms}
+                onSaveTeacher={handleSaveTeacher}
+                onDeleteTeacher={handleDeleteTeacher}
+                currentUser={effectiveUser}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Pengelolaan Data Guru & GTK hanya diperuntukkan bagi Administrator Sistem."
+              />
+            )
           )}
 
           {activeMenu === 'data-siswa' && (
@@ -1426,74 +1509,113 @@ export default function App() {
           )}
 
           {activeMenu === 'laporan-sekolah' && (
-            <LaporanSekolahView
-              school={db.schoolProfile}
-              classrooms={db.classrooms}
-              students={db.students}
-              teachers={db.teachers}
-              subjects={db.subjects}
-              scores={db.scores}
-              attendanceList={db.attendance}
-              academicYear={db.schoolProfile.activeAcademicYear}
-              semester={db.schoolProfile.activeSemester}
-              currentUser={effectiveUser}
-            />
+            effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
+              <LaporanSekolahView
+                school={db.schoolProfile}
+                classrooms={db.classrooms}
+                students={db.students}
+                teachers={db.teachers}
+                subjects={db.subjects}
+                scores={db.scores}
+                attendanceList={db.attendance}
+                academicYear={db.schoolProfile.activeAcademicYear}
+                semester={db.schoolProfile.activeSemester}
+                currentUser={effectiveUser}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Laporan Statistik Sekolah hanya dapat diakses oleh Kepala Sekolah dan Administrator."
+              />
+            )
           )}
 
           {activeMenu === 'impor-ekspor' && (
-            <ImporEksporDapodikView
-              students={db.students}
-              teachers={db.teachers}
-              classrooms={db.classrooms}
-              subjects={db.subjects}
-              scores={db.scores}
-              onImportStudents={handleImportStudents}
-              currentUser={effectiveUser}
-            />
+            effectiveUser.role === 'admin' ? (
+              <ImporEksporDapodikView
+                students={db.students}
+                teachers={db.teachers}
+                classrooms={db.classrooms}
+                subjects={db.subjects}
+                scores={db.scores}
+                onImportStudents={handleImportStudents}
+                currentUser={effectiveUser}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Fitur Impor & Ekspor Dapodik hanya dapat diakses oleh Administrator."
+              />
+            )
           )}
 
           {activeMenu === 'manajemen-wali-kelas' && (
-            <ManajemenWaliKelasView
-              users={db.users}
-              teachers={db.teachers}
-              classrooms={db.classrooms}
-              currentUser={effectiveUser}
-              onSaveWaliKelas={handleSaveWaliKelas}
-              onDeleteUser={handleDeleteUser}
-              onToggleStatus={handleToggleUserStatus}
-              onResetPassword={handleResetUserPassword}
-              onSwitchUser={(u) => {
-                handleSwitchUser(u);
-                setActiveMenu('dashboard');
-              }}
-            />
+            effectiveUser.role === 'admin' ? (
+              <ManajemenWaliKelasView
+                users={db.users}
+                teachers={db.teachers}
+                classrooms={db.classrooms}
+                currentUser={effectiveUser}
+                onSaveWaliKelas={handleSaveWaliKelas}
+                onDeleteUser={handleDeleteUser}
+                onToggleStatus={handleToggleUserStatus}
+                onResetPassword={handleResetUserPassword}
+                onSwitchUser={(u) => {
+                  handleSwitchUser(u);
+                  setActiveMenu('dashboard');
+                }}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Manajemen Akun Wali Kelas hanya dapat diakses oleh Administrator."
+              />
+            )
           )}
 
           {activeMenu === 'manajemen-pengguna' && (
-            <ManajemenPenggunaView
-              users={db.users}
-              teachers={db.teachers}
-              classrooms={db.classrooms}
-              currentUser={effectiveUser}
-              onSaveUser={handleSaveUser}
-              onDeleteUser={handleDeleteUser}
-              onSwitchUser={handleSwitchUser}
-            />
+            effectiveUser.role === 'admin' ? (
+              <ManajemenPenggunaView
+                users={db.users}
+                teachers={db.teachers}
+                classrooms={db.classrooms}
+                currentUser={effectiveUser}
+                onSaveUser={handleSaveUser}
+                onDeleteUser={handleDeleteUser}
+                onToggleUserStatus={handleToggleUserStatus}
+                onResetPassword={handleResetUserPassword}
+                auditLogs={db.auditLogs}
+                subjects={db.subjects}
+                teachingAssignments={db.teachingAssignments || []}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Manajemen Akun Pengguna hanya dapat diakses oleh Administrator Sistem."
+              />
+            )
           )}
 
           {activeMenu === 'pengaturan-aplikasi' && (
-            <PengaturanAplikasiView
-              school={db.schoolProfile}
-              auditLogs={db.auditLogs}
-              onUpdateSchoolSettings={handleUpdateSchoolSettings}
-              onBackupDatabase={handleBackupDatabase}
-              onRestoreDatabase={handleRestoreDatabase}
-              onResetDatabase={handleResetDatabase}
-              onPurgeMasterData={handlePurgeMasterData}
-              currentUser={effectiveUser}
-              db={db}
-              onApplyRemoteData={handleApplyRemoteData}
-            />
+            effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
+              <PengaturanAplikasiView
+                school={db.schoolProfile}
+                auditLogs={db.auditLogs}
+                onUpdateSchoolSettings={handleUpdateSchoolSettings}
+                onBackupDatabase={handleBackupDatabase}
+                onRestoreDatabase={handleRestoreDatabase}
+                onResetDatabase={handleResetDatabase}
+                onPurgeMasterData={handlePurgeMasterData}
+                currentUser={effectiveUser}
+                db={db}
+                onApplyRemoteData={handleApplyRemoteData}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Pengaturan aplikasi hanya dapat diakses oleh Administrator dan Kepala Sekolah."
+              />
+            )
           )}
         </main>
       </div>
