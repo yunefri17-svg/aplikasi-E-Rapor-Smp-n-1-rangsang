@@ -4,8 +4,6 @@ import {
   User as UserIcon,
   Eye,
   EyeOff,
-  School,
-  Calendar,
   LogIn,
   BookOpen,
   KeyRound,
@@ -14,9 +12,7 @@ import {
   CheckCircle2,
   X,
   ExternalLink,
-  ChevronRight,
-  HelpCircle,
-  Sparkles
+  HelpCircle
 } from 'lucide-react';
 import { TutWuriHandayaniLogo } from '../components/common/TutWuriHandayaniLogo';
 import { SchoolProfile, User } from '../types/erapor';
@@ -36,7 +32,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [selectedSemester, setSelectedSemester] = useState('2026/2027 Ganjil');
+  const selectedSemester = `${school.activeAcademicYear || '2026/2027'} ${school.activeSemester || 'Ganjil'}`;
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   
@@ -45,16 +41,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [resetIdentifier, setResetIdentifier] = useState('');
   const [resetStatus, setResetStatus] = useState<{ message: string; success: boolean } | null>(null);
   const [isResetLoading, setIsResetLoading] = useState(false);
-
-  const academicOptions = [
-    '2026/2027 Ganjil',
-    '2025/2026 Genap',
-    '2025/2026 Ganjil',
-    '2024/2025 Genap',
-    '2024/2025 Ganjil',
-    '2023/2024 Genap',
-    '2023/2024 Ganjil'
-  ];
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -248,7 +234,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   Aplikasi Laporan Hasil Belajar Jenjang SMP
                 </p>
                 <div className="inline-block px-3 py-1 rounded-lg bg-blue-900/60 border border-blue-400/30 text-xs font-bold text-amber-300">
-                  Versi 2025.2 &bull; Kurikulum Merdeka
+                  Kurikulum Merdeka
                 </div>
                 <div className="text-xs font-bold text-white pt-1">
                   {school.name} &bull; NPSN {school.npsn}
@@ -260,8 +246,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
 
             {/* Bottom Official Footer Info */}
-            <div className="relative z-10 pt-4 border-t border-blue-500/40 flex flex-col sm:flex-row items-center justify-between text-[11px] text-blue-200 gap-2">
-              <span className="font-mono">www.ditsmp.kemdikdasmen.go.id</span>
+            <div className="relative z-10 pt-4 border-t border-blue-500/40 flex items-center justify-end text-[11px] text-blue-200">
               <span className="flex items-center space-x-1.5 font-medium">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Terotentikasi Firebase Zero-Trust</span>
@@ -346,52 +331,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   </div>
                 </div>
 
-                {/* 3. Sekolah (Pre-selected) */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Sekolah :
-                  </label>
-                  <div className="relative rounded-xl border border-slate-200 bg-slate-50 text-slate-700 shadow-2xs">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-600">
-                      <School className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      readOnly
-                      value={`${school.name}`}
-                      className="w-full pl-9 pr-3 py-2.5 text-xs font-bold text-slate-800 bg-transparent rounded-xl cursor-default focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-
-                {/* 4. Semester / Tahun Pelajaran */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Semester :
-                  </label>
-                  <div className="relative rounded-xl border border-slate-300 focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-100 transition shadow-2xs bg-white">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-blue-600">
-                      <Calendar className="w-4 h-4" />
-                    </div>
-                    <select
-                      value={selectedSemester}
-                      onChange={(e) => setSelectedSemester(e.target.value)}
-                      className="w-full pl-9 pr-8 py-2.5 text-xs font-semibold text-slate-800 bg-transparent rounded-xl focus:outline-hidden appearance-none cursor-pointer"
-                    >
-                      {academicOptions.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt} {opt === '2026/2027 Ganjil' ? '(Tahun Ajaran Aktif)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400">
-                      <ChevronRight className="w-4 h-4 rotate-90" />
-                    </div>
-                  </div>
-                </div>
-
                 {/* Submit Button */}
-                <div className="pt-2">
+                <div className="pt-3">
                   <button
                     type="submit"
                     disabled={isLoading}
@@ -411,20 +352,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   </button>
                 </div>
               </form>
-
-              {/* Informative credentials note */}
-              <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200/80 text-[11px] text-blue-900 space-y-1">
-                <div className="font-bold flex items-center space-x-1.5 text-blue-950">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Keterangan Akun Pengguna:</span>
-                </div>
-                <p className="text-slate-600 leading-relaxed">
-                  Administrator: username <code className="bg-white px-1.5 py-0.5 rounded font-mono font-bold text-blue-800 border border-blue-200">admin</code> (kata sandi: <code className="bg-white px-1 py-0.5 rounded font-mono text-slate-700">admin123</code> atau <code className="bg-white px-1 py-0.5 rounded font-mono text-slate-700">smpn1rangsang</code>) atau email akun Google Anda.
-                </p>
-                <p className="text-slate-600 leading-relaxed">
-                  Guru &amp; Wali Kelas: masuk dengan username masing-masing atau NIP (kata sandi default: <code className="bg-white px-1 py-0.5 rounded font-mono text-slate-700">smpn1rangsang</code>).
-                </p>
-              </div>
             </div>
 
             {/* Bottom Security Assurance */}
@@ -449,7 +376,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <footer className="bg-blue-800 text-white py-3 px-4 text-center text-xs border-t border-blue-900 font-medium">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-1 text-[11px] text-blue-100">
           <span>
-            Aplikasi e-Rapor SMP | Versi 2025.2 | SMP Negeri 1 Rangsang
+            Aplikasi e-Rapor SMP | SMP Negeri 1 Rangsang
           </span>
           <span className="text-blue-200">
             Direktorat Sekolah Menengah Pertama &bull; Ditjen PAUD, Dikdas &amp; Dikmen &bull; Kemendikdasmen RI
