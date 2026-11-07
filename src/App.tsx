@@ -494,8 +494,10 @@ export default function App() {
       
       if (!skipCloudSync) {
         if (syncHint) {
-          // Surgical sync: update only one document (highly efficient)
+          // 1. Surgical sync: immediate push to Cloud Firestore
           surgicalSync(syncHint.collection, syncHint.id, syncHint.data).catch(() => {});
+          // 2. Also schedule background sync so all collections stay perfectly consistent
+          queueAutoSyncToFirestore(next, 3000);
         } else {
           // Fallback: full sync (debounced)
           queueAutoSyncToFirestore(next);
@@ -975,10 +977,17 @@ export default function App() {
   };
 
   const handleToggleUserStatus = (userId: string, newStatus: 'active' | 'inactive') => {
-    updateDbAndSave((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => (u.id === userId ? { ...u, status: newStatus } : u))
-    }));
+    const targetUser = db.users.find(u => u.id === userId);
+    const updatedUser = targetUser ? { ...targetUser, status: newStatus } : null;
+    
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        users: prev.users.map((u) => (u.id === userId ? { ...u, status: newStatus } : u))
+      }),
+      false,
+      updatedUser ? { collection: 'users', id: userId, data: updatedUser } : undefined
+    );
     logActivity(
       currentUser,
       'Ubah Status Akun',
@@ -987,10 +996,17 @@ export default function App() {
   };
 
   const handleResetUserPassword = (userId: string, newPass: string) => {
-    updateDbAndSave((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => (u.id === userId ? { ...u, password: newPass } : u))
-    }));
+    const targetUser = db.users.find(u => u.id === userId);
+    const updatedUser = targetUser ? { ...targetUser, password: newPass } : null;
+
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        users: prev.users.map((u) => (u.id === userId ? { ...u, password: newPass } : u))
+      }),
+      false,
+      updatedUser ? { collection: 'users', id: userId, data: updatedUser } : undefined
+    );
     logActivity(currentUser, 'Reset Password', `Mereset password untuk akun pengguna ID: ${userId}`);
   };
 

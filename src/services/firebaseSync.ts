@@ -289,14 +289,9 @@ export async function ensureFirebaseAuth(): Promise<void> {
     if (error?.code === 'auth/unauthorized-domain' || error?.message?.includes('unauthorized-domain')) {
       unauthorizedDomainDetected = true;
       const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Anda';
-      console.error(
-        `[Firebase Auth] Domain '${currentHost}' belum didaftarkan di Firebase Console! ` +
-        `Silakan buka Firebase Console -> Authentication -> Settings -> Authorized Domains -> Tambahkan '${currentHost}'.`
+      console.info(
+        `[Firebase Auth] Domain '${currentHost}' dapat ditambahkan di Firebase Console -> Authentication -> Settings -> Authorized Domains jika ingin menggunakan autentikasi penuh. Sinkronisasi Cloud Firestore database tetap berjalan normal.`
       );
-      updateSyncState({
-        status: 'error',
-        message: `Domain '${currentHost}' belum diizinkan di Firebase Console. Tambahkan domain ini di Authentication -> Authorized domains.`
-      });
     } else {
       console.warn('Firebase Auth note:', error?.message || error);
     }
@@ -326,15 +321,6 @@ export async function testFirestoreConnection(forceCheck: boolean = false): Prom
       await enableNetwork(db).catch(() => {});
     }
     await ensureFirebaseAuth();
-    
-    if (unauthorizedDomainDetected) {
-      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Vercel Anda';
-      return {
-        success: false,
-        message: `Domain '${currentHost}' belum diizinkan di Firebase Console. Tambahkan '${currentHost}' di Firebase Console > Authentication > Settings > Authorized Domains.`,
-        latencyMs: Date.now() - start
-      };
-    }
 
     // Test server reachability with getDocFromServer
     await getDocFromServer(doc(db, 'application_settings', 'app_state'));

@@ -27,7 +27,8 @@ import {
   Users,
   Award,
   Sparkles,
-  BookOpen
+  BookOpen,
+  CheckCircle2
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
 
@@ -73,6 +74,7 @@ export const ManajemenPenggunaView: React.FC<ManajemenPenggunaViewProps> = ({
   const [passwordModalUser, setPasswordModalUser] = useState<User | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const [savedToast, setSavedToast] = useState<string | null>(null);
 
   const classMap = new Map(classrooms.map((c) => [c.id, c.name]));
 
@@ -98,15 +100,18 @@ export const ManajemenPenggunaView: React.FC<ManajemenPenggunaViewProps> = ({
   const handleSaveModal = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingUser) {
+      const cleanUsername = editingUser.username.toLowerCase().replace(/\s+/g, '');
       const payload: User = {
         ...editingUser,
-        username: editingUser.username.toLowerCase().replace(/\s+/g, ''),
+        username: cleanUsername,
         password: userPassword || editingUser.password || 'smpn1rangsang',
         status: editingUser.status || 'active'
       };
       onSaveUser(payload);
       setIsModalOpen(false);
       setEditingUser(null);
+      setSavedToast(`Akun @${cleanUsername} (${payload.name}) berhasil disimpan dan disinkronkan ke Cloud Firestore.`);
+      setTimeout(() => setSavedToast(null), 4000);
     }
   };
 
@@ -184,6 +189,14 @@ export const ManajemenPenggunaView: React.FC<ManajemenPenggunaViewProps> = ({
           <span>Tambah Akun Pengguna</span>
         </button>
       </div>
+
+      {/* Sync Success Alert */}
+      {savedToast && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2 animate-in fade-in duration-200 shadow-xs">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-semibold">{savedToast}</span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2 text-xs font-semibold">
