@@ -52,6 +52,10 @@ interface InputNilaiViewProps {
   summativeAssessments?: SummativeAssessment[];
 }
 
+const EMPTY_TEACHERS: Teacher[] = [];
+const EMPTY_ASSIGNMENTS: TeachingAssignment[] = [];
+const EMPTY_SUMMATIVE: SummativeAssessment[] = [];
+
 export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   classrooms,
   subjects,
@@ -59,13 +63,13 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   learningObjectives,
   scores,
   curricula,
-  teachers = [],
-  teachingAssignments = [],
+  teachers = EMPTY_TEACHERS,
+  teachingAssignments = EMPTY_ASSIGNMENTS,
   onSaveScores,
   academicYear,
   semester,
   currentUser,
-  summativeAssessments = []
+  summativeAssessments = EMPTY_SUMMATIVE
 }) => {
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
   const isGuruMapel = currentUser.role === 'guru';
@@ -203,9 +207,13 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     [students, selectedClass]
   );
 
-  // Objectives for this subject & grade
-  const relevantTPs = learningObjectives.filter(
-    (tp) => tp.subjectId === selectedSubject && tp.gradeLevel === currentGrade
+  // Objectives for this subject & grade - memoized to prevent infinite render loops
+  const relevantTPs = useMemo(
+    () =>
+      learningObjectives.filter(
+        (tp) => tp.subjectId === selectedSubject && tp.gradeLevel === currentGrade
+      ),
+    [learningObjectives, selectedSubject, currentGrade]
   );
 
   // Local state for table editing
@@ -362,7 +370,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     scores,
     summativeAssessments,
     relevantTPs,
-    currentTeacher,
+    currentTeacher?.id,
+    currentUser.name,
     formatifWeight,
     sumatifWeight
   ]);

@@ -100,6 +100,8 @@ import { AsesmenSumatifView } from './views/AsesmenSumatifView';
 import { PengolahanNilaiAkhirView } from './views/PengolahanNilaiAkhirView';
 
 
+const EMPTY_ARRAY: any[] = [];
+
 export default function App() {
   const [db, setDb] = useState<AppDatabase>(() => {
     const loaded = loadDatabase();
@@ -1435,11 +1437,11 @@ export default function App() {
               students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
-              summativeAssessments={db.summativeAssessments || []}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               onSaveAssessment={handleSaveSummative}
               onDeleteAssessment={handleDeleteSummative}
               currentUser={effectiveUser}
-              teachingAssignments={db.teachingAssignments || []}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
             />
@@ -1451,14 +1453,14 @@ export default function App() {
               students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
-              summativeAssessments={db.summativeAssessments || []}
-              kktpConfigs={db.kktpConfigs || []}
-              finalScoreConfigs={db.finalScoreConfigs || []}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
+              kktpConfigs={db.kktpConfigs || EMPTY_ARRAY}
+              finalScoreConfigs={db.finalScoreConfigs || EMPTY_ARRAY}
               scores={db.scores}
               onSaveScores={handleSaveScores}
               onSaveConfig={handleSaveFinalScoreConfig}
               currentUser={effectiveUser}
-              teachingAssignments={db.teachingAssignments || []}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
             />
@@ -1473,12 +1475,12 @@ export default function App() {
               scores={db.scores}
               curricula={db.curricula}
               teachers={db.teachers}
-              teachingAssignments={db.teachingAssignments || []}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               onSaveScores={handleSaveScores}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
-              summativeAssessments={db.summativeAssessments || []}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
             />
           )}
 
