@@ -7,7 +7,8 @@ import {
   syncUsersWithTeachers,
   sanitizeTeachingAssignments,
   partialPurgeMasterData,
-  AppDatabase
+  AppDatabase,
+  calculatePredicate
 } from './services/storage';
 import {
   SchoolProfile,
@@ -1081,7 +1082,80 @@ export default function App() {
     updateDbAndSave(
       (prev) => {
         const filtered = (prev.summativeAssessments || []).filter(a => a.id !== sa.id);
-        return { ...prev, summativeAssessments: [...filtered, sa] };
+        const newSummatives = [...filtered, sa];
+
+        // Harmonize & synchronize with prev.scores in real time
+        const studentSummatives = newSummatives.filter(
+          a =>
+            a.studentId === sa.studentId &&
+            a.subjectId === sa.subjectId &&
+            a.academicYear === sa.academicYear &&
+            a.semester === sa.semester
+        );
+
+        const tpAverages: Record<string, number> = {};
+        const tpGroups: Record<string, number[]> = {};
+        studentSummatives.forEach(a => {
+          if (!tpGroups[a.tpId]) tpGroups[a.tpId] = [];
+          tpGroups[a.tpId].push(a.score);
+        });
+        Object.keys(tpGroups).forEach(tpId => {
+          const vals = tpGroups[tpId];
+          if (vals.length > 0) {
+            tpAverages[tpId] = Math.round(vals.reduce((p, c) => p + c, 0) / vals.length);
+          }
+        });
+
+        const avgs = Object.values(tpAverages);
+        const avgMateri = avgs.length > 0 ? Math.round(avgs.reduce((p, c) => p + c, 0) / avgs.length) : 0;
+        
+        const scoreKey = (s: AssessmentScore) =>
+          `${s.studentId}-${s.subjectId}-${(s.academicYear || '').replace(/\//g, '_')}-${s.semester}`;
+        const targetKey = `${sa.studentId}-${sa.subjectId}-${(sa.academicYear || '').replace(/\//g, '_')}-${sa.semester}`;
+
+        const existingScore = prev.scores.find(s => scoreKey(s) === targetKey);
+        const sasScore = existingScore?.sumatifAkhirSemester || 0;
+        const finalCalculated = sasScore > 0 ? Math.round(avgMateri * 0.5 + sasScore * 0.5) : avgMateri;
+        const pred = calculatePredicate(finalCalculated, 75);
+
+        const updatedScore: AssessmentScore = existingScore
+          ? {
+              ...existingScore,
+              sumatifMateriScores: { ...existingScore.sumatifMateriScores, ...tpAverages },
+              finalScore: finalCalculated,
+              predicate: pred,
+              updatedAt: new Date().toISOString()
+            }
+          : {
+              id: `sc-${Date.now()}-${sa.studentId}`,
+              studentId: sa.studentId,
+              subjectId: sa.subjectId,
+              classId: sa.classId,
+              academicYear: sa.academicYear,
+              semester: sa.semester,
+              formatifScores: {},
+              sumatifMateriScores: tpAverages,
+              sumatifAkhirSemester: 0,
+              finalScore: finalCalculated,
+              predicate: pred,
+              highestCompetenceDesc: '',
+              lowestCompetenceDesc: '',
+              updatedAt: new Date().toISOString(),
+              status: 'SELESAI'
+            };
+
+        const updatedScores = prev.scores.some(s => scoreKey(s) === targetKey)
+          ? prev.scores.map(s => (scoreKey(s) === targetKey ? updatedScore : s))
+          : [...prev.scores, updatedScore];
+
+        // Also surgically sync the score to Firestore
+        surgicalSync('assessment_scores', updatedScore.id, updatedScore).catch(() => {});
+
+        return {
+          ...prev,
+          summativeAssessments: newSummatives,
+          scores: updatedScores
+        };
       },
       false,
       { collection: 'summative_assessments', id: sa.id, data: sa }
@@ -1404,6 +1478,7 @@ export default function App() {
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
+              summativeAssessments={db.summativeAssessments || []}
             />
           )}
 

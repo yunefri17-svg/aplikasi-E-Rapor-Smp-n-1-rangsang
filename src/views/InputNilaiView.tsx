@@ -9,7 +9,8 @@ import {
   User,
   Teacher,
   AppNotification,
-  TeachingAssignment
+  TeachingAssignment,
+  SummativeAssessment
 } from '../types/erapor';
 import {
   FileSpreadsheet,
@@ -26,7 +27,8 @@ import {
   Lock,
   AlertTriangle,
   UserCheck,
-  BookOpen
+  BookOpen,
+  RefreshCw
 } from 'lucide-react';
 import { calculatePredicate, generateCompetenceDescriptions } from '../services/storage';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
@@ -47,6 +49,7 @@ interface InputNilaiViewProps {
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
+  summativeAssessments?: SummativeAssessment[];
 }
 
 export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
@@ -61,7 +64,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   onSaveScores,
   academicYear,
   semester,
-  currentUser
+  currentUser,
+  summativeAssessments = []
 }) => {
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
   const isGuruMapel = currentUser.role === 'guru';
@@ -206,8 +210,9 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
 
   // Local state for table editing
   const [localScores, setLocalScores] = useState<Record<string, AssessmentScore>>({});
+  const [syncSuccessMessage, setSyncSuccessMessage] = useState<string | null>(null);
 
-  // Sync from props when class/subject changes
+  // Sync from props when class/subject changes or summative assessments update
   useEffect(() => {
     const map: Record<string, AssessmentScore> = {};
     const sanitizedYear = (academicYear || '').replace(/\//g, '_');
@@ -222,16 +227,102 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           sc.semester === semester
       );
 
+      // Collect scores from 14. Asesmen Sumatif (Kurikulum Merdeka)
+      const studentSummative = summativeAssessments.filter(
+        (a) =>
+          a.studentId === std.id &&
+          a.subjectId === selectedSubject &&
+          (a.academicYear === academicYear || (a.academicYear || '').replace(/\//g, '_') === sanitizedYear) &&
+          a.semester === semester
+      );
+
+      const tpScores: Record<string, number[]> = {};
+      studentSummative.forEach((a) => {
+        if (!tpScores[a.tpId]) tpScores[a.tpId] = [];
+        tpScores[a.tpId].push(a.score);
+      });
+
+      const tpAveragesFromSummative: Record<string, number> = {};
+      relevantTPs.forEach((tp) => {
+        const vals = tpScores[tp.id] || [];
+        if (vals.length > 0) {
+          tpAveragesFromSummative[tp.id] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+        }
+      });
+
+      const hasSummativeData = Object.keys(tpAveragesFromSummative).length > 0;
+
       if (existing) {
-        map[std.id] = { ...existing };
+        // If summative assessments exist, overlay them over sumatifMateriScores
+        const mergedSumatifMateri = {
+          ...(existing.sumatifMateriScores || {}),
+          ...tpAveragesFromSummative
+        };
+
+        let calculatedFinal = existing.finalScore;
+        let calculatedPred = existing.predicate;
+
+        if (hasSummativeData) {
+          const materiVals = relevantTPs
+            .map((tp) => mergedSumatifMateri[tp.id])
+            .filter((v) => v !== undefined && v !== null && !isNaN(v) && v > 0);
+
+          const avgMateri = materiVals.length > 0
+            ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
+            : existing.finalScore;
+
+          const sas = existing.sumatifAkhirSemester ?? 0;
+          calculatedFinal = sas > 0
+            ? Math.round(avgMateri * formatifWeight + sas * sumatifWeight)
+            : avgMateri;
+
+          calculatedPred = calculatePredicate(calculatedFinal, 75);
+        }
+
+        const descs = generateCompetenceDescriptions(
+          relevantTPs,
+          existing.formatifScores || {},
+          mergedSumatifMateri
+        );
+
+        map[std.id] = {
+          ...existing,
+          sumatifMateriScores: mergedSumatifMateri,
+          finalScore: calculatedFinal,
+          predicate: calculatedPred,
+          highestCompetenceDesc: existing.highestCompetenceDesc || descs.highest,
+          lowestCompetenceDesc: existing.lowestCompetenceDesc || descs.lowest
+        };
       } else {
-        // Default clean state
         const defaultFormatif: Record<string, number> = {};
         const defaultSumatifMateri: Record<string, number> = {};
+
         relevantTPs.forEach((tp) => {
           defaultFormatif[tp.id] = 80;
-          defaultSumatifMateri[tp.id] = 80;
+          if (tpAveragesFromSummative[tp.id] !== undefined) {
+            defaultSumatifMateri[tp.id] = tpAveragesFromSummative[tp.id];
+          } else if (hasSummativeData) {
+            defaultSumatifMateri[tp.id] = 0;
+          } else {
+            defaultSumatifMateri[tp.id] = 80;
+          }
         });
+
+        let finalScore = 80;
+        let sasVal = 80;
+
+        if (hasSummativeData) {
+          const materiVals = relevantTPs
+            .map((tp) => defaultSumatifMateri[tp.id])
+            .filter((v) => v !== undefined && v > 0);
+
+          const avgMateri = materiVals.length > 0
+            ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
+            : 0;
+
+          sasVal = 0;
+          finalScore = avgMateri;
+        }
 
         const descs = generateCompetenceDescriptions(relevantTPs, defaultFormatif, defaultSumatifMateri);
 
@@ -249,9 +340,9 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           semester,
           formatifScores: defaultFormatif,
           sumatifMateriScores: defaultSumatifMateri,
-          sumatifAkhirSemester: 80,
-          finalScore: 80,
-          predicate: 'B',
+          sumatifAkhirSemester: sasVal,
+          finalScore,
+          predicate: calculatePredicate(finalScore, 75),
           highestCompetenceDesc: descs.highest,
           lowestCompetenceDesc: descs.lowest,
           status: 'DALAM PROSES',
@@ -262,7 +353,115 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     });
 
     setLocalScores(map);
-  }, [selectedClass, selectedSubject, academicYear, semester, students, scores, currentTeacher]);
+  }, [
+    selectedClass,
+    selectedSubject,
+    academicYear,
+    semester,
+    students,
+    scores,
+    summativeAssessments,
+    relevantTPs,
+    currentTeacher,
+    formatifWeight,
+    sumatifWeight
+  ]);
+
+  // Manually force sync and overlay from Summative Assessments
+  const handleSyncFromSummative = () => {
+    const map = { ...localScores };
+    const sanitizedYear = (academicYear || '').replace(/\//g, '_');
+    let matchedCount = 0;
+
+    classStudents.forEach((std) => {
+      const studentSummative = summativeAssessments.filter(
+        (a) =>
+          a.studentId === std.id &&
+          a.subjectId === selectedSubject &&
+          (a.academicYear === academicYear || (a.academicYear || '').replace(/\//g, '_') === sanitizedYear) &&
+          a.semester === semester
+      );
+
+      if (studentSummative.length === 0) return;
+
+      const tpScores: Record<string, number[]> = {};
+      studentSummative.forEach((a) => {
+        if (!tpScores[a.tpId]) tpScores[a.tpId] = [];
+        tpScores[a.tpId].push(a.score);
+      });
+
+      const tpAveragesFromSummative: Record<string, number> = {};
+      relevantTPs.forEach((tp) => {
+        const vals = tpScores[tp.id] || [];
+        if (vals.length > 0) {
+          tpAveragesFromSummative[tp.id] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+        }
+      });
+
+      if (Object.keys(tpAveragesFromSummative).length > 0) {
+        matchedCount++;
+        const current = map[std.id];
+        const mergedMateri = {
+          ...(current?.sumatifMateriScores || {}),
+          ...tpAveragesFromSummative
+        };
+
+        const materiVals = relevantTPs
+          .map((tp) => mergedMateri[tp.id])
+          .filter((v) => v !== undefined && v !== null && !isNaN(v) && v > 0);
+
+        const avgMateri = materiVals.length > 0
+          ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
+          : (current?.finalScore || 80);
+
+        const sas = current?.sumatifAkhirSemester ?? 0;
+        const finalCalculated = sas > 0
+          ? Math.round(avgMateri * formatifWeight + sas * sumatifWeight)
+          : avgMateri;
+
+        const pred = calculatePredicate(finalCalculated, 75);
+        const descs = generateCompetenceDescriptions(
+          relevantTPs,
+          current?.formatifScores || {},
+          mergedMateri
+        );
+
+        map[std.id] = {
+          ...(current || {
+            id: `sc-${std.id}-${selectedSubject}-${sanitizedYear}-${semester}`,
+            studentId: std.id,
+            studentName: std.name,
+            subjectId: selectedSubject,
+            subjectName: subjects.find((s) => s.id === selectedSubject)?.name || '',
+            classId: selectedClass,
+            className: currentClass?.name || '',
+            teacherId: currentTeacher?.id || '',
+            teacherName: currentTeacher?.name || currentUser.name,
+            academicYear,
+            semester,
+            formatifScores: {},
+            sumatifAkhirSemester: 0,
+            status: 'DALAM PROSES'
+          }),
+          sumatifMateriScores: mergedMateri,
+          finalScore: finalCalculated,
+          predicate: pred,
+          highestCompetenceDesc: descs.highest,
+          lowestCompetenceDesc: descs.lowest,
+          updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+          updatedBy: currentUser.name
+        };
+      }
+    });
+
+    setLocalScores(map);
+    setSyncSuccessMessage(
+      matchedCount > 0
+        ? `${matchedCount} nilai peserta didik berhasil disinkronkan dari Asesmen Sumatif!`
+        : 'Seluruh nilai sudah tersinkron dengan Asesmen Sumatif.'
+    );
+    setTimeout(() => setSyncSuccessMessage(null), 4000);
+  };
 
   // Check for revision requests from Wali Kelas
   const revisionEntry = useMemo(() => {
@@ -442,6 +641,15 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           )}
 
           <button
+            onClick={handleSyncFromSummative}
+            className="px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+            title="Sinkronkan nilai yang telah diinput di menu 14. Asesmen Sumatif & 15. Pengolahan Nilai Akhir"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
+            Sinkronkan Nilai Sumatif
+          </button>
+
+          <button
             onClick={() => setIsBulkPasteOpen(true)}
             className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold flex items-center gap-1.5 transition"
             title="Salin dan tempel kolom nilai dari spreadsheet Excel"
@@ -468,6 +676,14 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Sync Success Notification */}
+      {syncSuccessMessage && (
+        <div className="bg-emerald-50 border border-emerald-300 text-emerald-800 px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{syncSuccessMessage}</span>
+        </div>
+      )}
 
       {/* Teacher Profile & Assignment Banner */}
       {isGuruMapel && (
@@ -544,7 +760,11 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <div className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            Tersinkron Otomatis dari Asesmen Sumatif
+          </div>
           <div className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-medium">
             Bobot: {curMerdeka.formatifWeight}% Sumatif Materi + {curMerdeka.sumatifWeight}% SAS
           </div>

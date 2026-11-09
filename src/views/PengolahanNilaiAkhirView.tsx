@@ -425,9 +425,9 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
             <TrendingUp className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h4 className="text-white font-bold text-sm">Siap Posting Nilai?</h4>
+            <h4 className="text-white font-bold text-sm">Siap Posting Nilai ke Rapor?</h4>
             <p className="text-slate-400 text-[11px] leading-relaxed max-w-md">
-              Sistem akan menghitung nilai akhir dan menghasilkan deskripsi otomatis berdasarkan KKTP yang telah dikonfigurasi. Anda tetap bisa mengedit deskripsi di menu Deskripsi Nilai.
+              Nilai dihitung secara otomatis dari Asesmen Sumatif (menu 14) dan kini otomatis tersinkron ke menu 17 Input Nilai Siswa. Klik tombol ini untuk mengunci nilai akhir serta rumusan deskripsi capaian kompetensi ke Rapor & Leger.
             </p>
           </div>
         </div>
