@@ -108,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({
   const badge = roleBadge(currentUser.role);
 
   return (
-    <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+    <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:hidden">
       <div className="px-4 py-2.5 flex items-center justify-between">
         {/* Left Section: Mobile toggle & School Identity */}
         <div className="flex items-center gap-3">

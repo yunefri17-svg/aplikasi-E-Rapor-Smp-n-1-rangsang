@@ -31,7 +31,10 @@ import {
   FormativeAssessment,
   SummativeAssessment,
   KKTPConfig,
-  SubjectFinalScoreConfig
+  SubjectFinalScoreConfig,
+  AcademicYearPeriod,
+  StudentMutation,
+  StudentAchievement
 } from './types/erapor';
 import { Calendar } from 'lucide-react';
 import {
@@ -89,6 +92,9 @@ import { ImporEksporDapodikView } from './views/ImporEksporDapodikView';
 import { ManajemenWaliKelasView } from './views/ManajemenWaliKelasView';
 import { ManajemenPenggunaView } from './views/ManajemenPenggunaView';
 import { PengaturanAplikasiView } from './views/PengaturanAplikasiView';
+import { ManajemenTahunAjaranView } from './views/ManajemenTahunAjaranView';
+import { BukuIndukView } from './views/BukuIndukView';
+import { TranskripNilaiView } from './views/TranskripNilaiView';
 import { LoginView } from './views/LoginView';
 import { getSavedSessionUserId, logoutUser } from './services/authService';
 import { SecurityAccessDenied } from './components/SecurityAccessDenied';
@@ -362,6 +368,10 @@ export default function App() {
 
         mergeList('extracurriculars', payload.extracurriculars);
         mergeList('studentExtracurriculars', payload.studentExtracurriculars);
+        mergeList('academicYears', payload.academicYears);
+        mergeList('studentMutations', payload.studentMutations);
+        mergeList('studentAchievements', payload.studentAchievements);
+        mergeList('kokurikulerProjects', payload.kokurikulerProjects);
 
         if (changed) {
           const finalDb = syncUsersWithTeachers(updated);
@@ -875,7 +885,7 @@ export default function App() {
     logActivity(currentUser, 'Simpan Bank Deskripsi', 'Memperbarui bank deskripsi nilai otomatis.');
   };
 
-  // Handlers for Class Promotion
+  // Handlers for Class Promotion & Graduation
   const handlePromoteStudents = (studentIds: string[], targetClassId: string) => {
     updateDbAndSave((prev) => {
       const updatedStudents = prev.students.map((s) => {
@@ -887,6 +897,79 @@ export default function App() {
       return { ...prev, students: updatedStudents };
     });
     logActivity(currentUser, 'Kenaikan Kelas Siswa', `Memindahkan ${studentIds.length} siswa ke rombel tujuan.`);
+  };
+
+  const handleBatchGraduation = (graduations: { studentId: string; diplomaNumber: string; graduationDate: string }[]) => {
+    updateDbAndSave((prev) => {
+      const gradMap = new Map(graduations.map((g) => [g.studentId, g]));
+      const updatedStudents = prev.students.map((s) => {
+        if (gradMap.has(s.id)) {
+          return {
+            ...s,
+            status: 'Lulus' as const
+          };
+        }
+        return s;
+      });
+      return { ...prev, students: updatedStudents };
+    });
+    logActivity(
+      currentUser,
+      'Penetapan Kelulusan Kelas IX',
+      `Menetapkan kelulusan untuk ${graduations.length} siswa menjadi Alumni.`
+    );
+  };
+
+  // Handlers for Academic Years & Semesters
+  const handleUpdateAcademicYears = (
+    years: AcademicYearPeriod[],
+    activeYear?: string,
+    activeSemester?: 'Ganjil' | 'Genap'
+  ) => {
+    updateDbAndSave((prev) => {
+      let updatedSchoolProfile = { ...prev.schoolProfile };
+      if (activeYear && activeSemester) {
+        updatedSchoolProfile.activeAcademicYear = activeYear;
+        updatedSchoolProfile.activeSemester = activeSemester;
+      }
+      return {
+        ...prev,
+        academicYears: years,
+        schoolProfile: updatedSchoolProfile
+      };
+    });
+    years.forEach((yr) => {
+      surgicalSync('academic_years', yr.id, yr).catch(() => {});
+    });
+    logActivity(
+      currentUser,
+      'Perubahan Manajemen Tahun Ajaran',
+      `Memperbarui data status tahun pelajaran & semester (${activeYear || ''} ${activeSemester || ''})`
+    );
+  };
+
+  // Handlers for Student Mutations
+  const handleSaveMutations = (newMutations: StudentMutation[]) => {
+    updateDbAndSave((prev) => ({
+      ...prev,
+      studentMutations: newMutations
+    }));
+    newMutations.forEach((m) => {
+      surgicalSync('student_mutations', m.id, m).catch(() => {});
+    });
+    logActivity(currentUser, 'Simpan Mutasi Siswa', `Menyimpan data mutasi siswa (${newMutations.length} catatan).`);
+  };
+
+  // Handlers for Student Achievements
+  const handleSaveAchievements = (achievements: StudentAchievement[]) => {
+    updateDbAndSave((prev) => ({
+      ...prev,
+      studentAchievements: achievements
+    }));
+    achievements.forEach((a) => {
+      surgicalSync('student_achievements', a.id, a).catch(() => {});
+    });
+    logActivity(currentUser, 'Simpan Prestasi Siswa', `Menyimpan ${achievements.length} catatan prestasi siswa.`);
   };
 
   // Handlers for Users
@@ -1240,7 +1323,7 @@ export default function App() {
       />
 
       {/* Main Content Container (ml-72 on desktop, full width on mobile) */}
-      <div className="flex-1 flex flex-col min-w-0 md:ml-72 min-h-screen">
+      <div className="flex-1 flex flex-col min-w-0 md:ml-72 min-h-screen print:ml-0 print:m-0 print:w-full print:min-h-0">
         {/* Header bar */}
         <Header
           school={db.schoolProfile}
@@ -1262,7 +1345,7 @@ export default function App() {
         />
 
         {/* Main Content Area */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 custom-scrollbar">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 custom-scrollbar print:p-0 print:m-0 print:overflow-visible">
           {activeMenu === 'dashboard' && (
             <DashboardView
               school={db.schoolProfile}
@@ -1279,6 +1362,49 @@ export default function App() {
           )}
 
           {activeMenu === 'data-referensi' && <DataReferensiView />}
+
+          {activeMenu === 'buku-induk' && (
+            <BukuIndukView
+              school={db.schoolProfile}
+              students={db.students}
+              classrooms={db.classrooms}
+              subjects={db.subjects}
+              scores={db.scores}
+              attendanceList={db.attendance}
+              extracurriculars={db.extracurriculars}
+              studentExtracurriculars={db.studentExtracurriculars}
+              homeroomNotes={db.homeroomNotes}
+              studentMutations={db.studentMutations || []}
+              studentAchievements={db.studentAchievements || []}
+              kokurikulerProjects={db.kokurikulerProjects || []}
+              currentUser={effectiveUser}
+            />
+          )}
+
+          {activeMenu === 'manajemen-tahun-ajaran' && (
+            effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
+              <ManajemenTahunAjaranView
+                schoolProfile={db.schoolProfile}
+                academicYears={db.academicYears || []}
+                students={db.students}
+                scores={db.scores}
+                auditLogs={db.auditLogs}
+                currentUser={effectiveUser}
+                onUpdateAcademicYears={(years, activeYear, activeSemester, reportDate) => {
+                  handleUpdateAcademicYears(years, activeYear, activeSemester);
+                  if (reportDate) {
+                    handleUpdateSchoolSettings({ reportDate });
+                  }
+                }}
+                onLogAudit={(action, details) => logActivity(currentUser, action, details)}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Manajemen Tahun Ajaran & Semester hanya dapat diakses oleh Administrator dan Kepala Sekolah."
+              />
+            )
+          )}
 
           {activeMenu === 'data-sekolah' && (
             effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
@@ -1566,6 +1692,19 @@ export default function App() {
             />
           )}
 
+          {activeMenu === 'transkrip-nilai' && (
+            <TranskripNilaiView
+              school={db.schoolProfile}
+              students={db.students}
+              classrooms={db.classrooms}
+              subjects={db.subjects}
+              scores={db.scores}
+              homeroomNotes={db.homeroomNotes}
+              currentUser={effectiveUser}
+              onSaveScores={handleSaveScores}
+            />
+          )}
+
           {activeMenu === 'kenaikan-kelas' && (
             <KenaikanKelasView
               classrooms={db.classrooms}
@@ -1574,8 +1713,13 @@ export default function App() {
               scores={db.scores}
               attendanceList={db.attendance}
               homeroomNotes={db.homeroomNotes}
+              mutations={db.studentMutations || []}
               onSaveDecisions={handleSaveHomeroomNotes}
               onPromoteStudents={handlePromoteStudents}
+              onSaveMutations={handleSaveMutations}
+              onAddStudent={handleSaveStudent}
+              onUpdateStudent={handleSaveStudent}
+              onBatchGraduation={handleBatchGraduation}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}

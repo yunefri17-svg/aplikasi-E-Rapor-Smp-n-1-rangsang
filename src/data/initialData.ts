@@ -17,7 +17,11 @@ import {
   KKTPConfig,
   FormativeAssessment,
   SummativeAssessment,
-  SubjectFinalScoreConfig
+  SubjectFinalScoreConfig,
+  AcademicYearPeriod,
+  StudentMutation,
+  StudentAchievement,
+  KokurikulerProject
 } from '../types/erapor';
 
 export const initialSchoolProfile: SchoolProfile = {
@@ -1336,5 +1340,157 @@ export const initialFinalScoreConfigs: SubjectFinalScoreConfig[] = [
     classId: 'cls-vii-1',
     method: 'rata-rata',
     sasWeight: 30
+  }
+];
+
+export const initialAcademicYears: AcademicYearPeriod[] = [
+  {
+    id: 'ay-2024-2025',
+    name: '2024/2025',
+    status: 'arsip',
+    isLocked: true,
+    startDate: '2024-07-15',
+    endDate: '2025-06-21',
+    notes: 'Tahun Ajaran 2024/2025 telah diarsipkan dan dikunci secara permanen.',
+    semesters: [
+      { semester: 'Ganjil', status: 'arsip', reportDate: '20 Desember 2024', isLocked: true },
+      { semester: 'Genap', status: 'arsip', reportDate: '21 Juni 2025', isLocked: true }
+    ],
+    createdAt: '2024-07-01'
+  },
+  {
+    id: 'ay-2025-2026',
+    name: '2025/2026',
+    status: 'arsip',
+    isLocked: true,
+    startDate: '2025-07-14',
+    endDate: '2026-06-20',
+    notes: 'Tahun Ajaran 2025/2026 telah diarsipkan.',
+    semesters: [
+      { semester: 'Ganjil', status: 'arsip', reportDate: '19 Desember 2025', isLocked: true },
+      { semester: 'Genap', status: 'arsip', reportDate: '20 Juni 2026', isLocked: true }
+    ],
+    createdAt: '2025-07-01'
+  },
+  {
+    id: 'ay-2026-2027',
+    name: '2026/2027',
+    status: 'aktif',
+    isLocked: false,
+    startDate: '2026-07-13',
+    endDate: '2027-06-19',
+    notes: 'Tahun Ajaran Berjalan Aktif (Semester 1 / Ganjil)',
+    semesters: [
+      { semester: 'Ganjil', status: 'aktif', reportDate: '19 Desember 2026', isLocked: false },
+      { semester: 'Genap', status: 'persiapan', reportDate: '19 Juni 2027', isLocked: false }
+    ],
+    createdAt: '2026-07-01'
+  },
+  {
+    id: 'ay-2027-2028',
+    name: '2027/2028',
+    status: 'persiapan',
+    isLocked: false,
+    startDate: '2027-07-12',
+    endDate: '2028-06-17',
+    notes: 'Tahun Ajaran Mendatang (Persiapan Pendaftaran & Rombel Baru)',
+    semesters: [
+      { semester: 'Ganjil', status: 'persiapan', reportDate: '18 Desember 2027', isLocked: false },
+      { semester: 'Genap', status: 'persiapan', reportDate: '17 Juni 2028', isLocked: false }
+    ],
+    createdAt: '2026-11-01'
+  },
+  {
+    id: 'ay-2028-2029',
+    name: '2028/2029',
+    status: 'persiapan',
+    isLocked: false,
+    startDate: '2028-07-10',
+    endDate: '2029-06-16',
+    notes: 'Tahun Ajaran Mendatang (Perencanaan Strategis Jangka Menengah)',
+    semesters: [
+      { semester: 'Ganjil', status: 'persiapan', reportDate: '16 Desember 2028', isLocked: false },
+      { semester: 'Genap', status: 'persiapan', reportDate: '16 Juni 2029', isLocked: false }
+    ],
+    createdAt: '2026-11-01'
+  }
+];
+
+export const initialStudentMutations: StudentMutation[] = [
+  {
+    id: 'mut-1',
+    studentId: 'std-703',
+    studentName: 'AISYAH PUTRI',
+    nisn: '0138926776',
+    type: 'masuk',
+    date: '2026-07-15',
+    previousSchool: 'SDN 04 Tanjung Samak',
+    classId: 'cls-vii-1',
+    className: 'Kelas VII.1',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    reason: 'Pindah domisili mengikuti orang tua',
+    letterNumber: '421.3/SDN04-TS/VII/2026/089',
+    createdAt: '2026-07-15'
+  }
+];
+
+export const initialStudentAchievements: StudentAchievement[] = [
+  {
+    id: 'ach-1',
+    studentId: 'std-701',
+    studentName: 'ABID MAULANA',
+    nisn: '0131591006',
+    className: 'Kelas VII.1',
+    title: 'Olimpiade Sains Nasional (OSN) IPA Tingkat Kabupaten',
+    type: 'Akademik',
+    level: 'Kabupaten',
+    rank: 'Juara 2',
+    year: '2026',
+    organizer: 'Dinas Pendidikan dan Kebudayaan Kab. Kepulauan Meranti',
+    certificateNumber: '003/OSN-SMP/DISDIK/2026',
+    notes: 'Mewakili sekolah ke tingkat Provinsi Riau',
+    createdAt: '2026-09-10'
+  },
+  {
+    id: 'ach-2',
+    studentId: 'std-702',
+    studentName: 'ADELIA MARSYA',
+    nisn: '0135703530',
+    className: 'Kelas VII.1',
+    title: 'Festival Lomba Seni Siswa Nasional (FLS2N) Tari Kreasi',
+    type: 'Non-Akademik',
+    level: 'Kecamatan',
+    rank: 'Juara 1',
+    year: '2026',
+    organizer: 'K3S Kecamatan Rangsang',
+    certificateNumber: '012/FLS2N-KEC/2026',
+    createdAt: '2026-08-20'
+  }
+];
+
+export const initialKokurikulerProjects: KokurikulerProject[] = [
+  {
+    id: 'p5-1',
+    title: 'Pemanfaatan Ekosistem Mangrove & Konservasi Pesisir Pulau Rangsang',
+    theme: 'Gaya Hidup Berkelanjutan',
+    gradeLevel: '7',
+    classId: 'cls-vii-1',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    description: 'Peserta didik melakukan observasi lapangan dan penanaman bibit bakau di pesisir Tanjung Samak serta membuat laporan edukasi.',
+    facilitatorName: 'Siti Rahma, S.Pd.',
+    createdAt: '2026-08-01'
+  },
+  {
+    id: 'p5-2',
+    title: 'Pelestarian Seni Tari Tradisional & Pantun Budaya Melayu Riau',
+    theme: 'Kearifan Lokal',
+    gradeLevel: '7',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    description: 'Pengenalan dan pergelaran seni tari zapin serta berbalas pantun adat Melayu khas Kepulauan Meranti.',
+    facilitatorName: 'Dewi Lestari, S.Pd.',
+    createdAt: '2026-08-01'
   }
 ];

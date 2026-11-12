@@ -316,31 +316,12 @@ export const buildReportContentPages = (
   const sortedSubjects = sortSubjects(subjects);
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  // Header / Kop Sekolah
+  // Title (Standar Kurikulum Merdeka - Tanpa Kop Surat di Halaman Nilai)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('PEMERINTAH KABUPATEN KEPULAUAN MERANTI', pageWidth / 2, 14, { align: 'center' });
-  doc.setFontSize(10);
-  doc.text('DINAS PENDIDIKAN DAN KEBUDAYAAN', pageWidth / 2, 19, { align: 'center' });
-  doc.setFontSize(13);
-  doc.text(school.name, pageWidth / 2, 25, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.text(`${school.address}, Kec. ${school.kecamatan}, Kab. ${school.kabupaten}, Prov. ${school.provinsi}`, pageWidth / 2, 29.5, { align: 'center' });
-  doc.text(`NPSN: ${school.npsn} | Email: ${school.email} | Kode Pos: ${school.postalCode}`, pageWidth / 2, 33.5, { align: 'center' });
-
-  // Double horizontal divider line
-  doc.setLineWidth(0.8);
-  doc.line(14, 36, pageWidth - 14, 36);
-  doc.setLineWidth(0.3);
-  doc.line(14, 37, pageWidth - 14, 37);
-
-  // Title
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('LAPORAN HASIL BELAJAR (RAPOR)', pageWidth / 2, 43, { align: 'center' });
+  doc.text('LAPORAN HASIL BELAJAR (RAPOR)', pageWidth / 2, 16, { align: 'center' });
   doc.setFontSize(9);
-  doc.text(`KURIKULUM MERDEKA - TAHUN PELAJARAN ${academicYear}`, pageWidth / 2, 47.5, { align: 'center' });
+  doc.text(`KURIKULUM MERDEKA - TAHUN PELAJARAN ${academicYear}`, pageWidth / 2, 21, { align: 'center' });
 
   // Student Identity Grid with perfectly aligned colons using autoTable
   const parentNameDisplay = student.fatherName
@@ -355,7 +336,7 @@ export const buildReportContentPages = (
   ];
 
   autoTable(doc, {
-    startY: 52,
+    startY: 26,
     body: identityRows,
     theme: 'plain',
     styles: {
@@ -522,7 +503,16 @@ export const buildReportContentPages = (
     doc.text('E. Keputusan Kenaikan Kelas / Kelulusan', 14, finalY);
     finalY += 3;
 
-    const decision = homeroomNote?.promotionDecision || 'Naik ke Kelas berikutnya';
+    const defaultDecision =
+      classroom.gradeLevel === '7'
+        ? 'Naik ke Kelas VIII'
+        : classroom.gradeLevel === '8'
+        ? 'Naik ke Kelas IX'
+        : 'Lulus dari Satuan Pendidikan SMP Negeri 1 Rangsang';
+    const decision =
+      homeroomNote?.promotionDecision && homeroomNote.promotionDecision !== 'Belum Ditentukan'
+        ? homeroomNote.promotionDecision
+        : defaultDecision;
     autoTable(doc, {
       startY: finalY,
       body: [[`Berdasarkan pencapaian seluruh kriteria, siswa ditetapkan: ${decision.toUpperCase()}`]],

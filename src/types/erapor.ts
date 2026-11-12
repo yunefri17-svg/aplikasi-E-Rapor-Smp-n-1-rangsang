@@ -305,3 +305,74 @@ export interface SubjectFinalScoreConfig {
   sasWeight?: number; // Weight for Summative Akhir Semester
 }
 
+export interface AcademicSemesterConfig {
+  semester: 'Ganjil' | 'Genap';
+  status: 'aktif' | 'arsip' | 'persiapan';
+  reportDate: string;
+  isLocked?: boolean;
+}
+
+export interface AcademicYearPeriod {
+  id: string; // e.g. "ay-2026-2027"
+  name: string; // e.g. "2026/2027"
+  status: 'aktif' | 'persiapan' | 'arsip';
+  semesters: AcademicSemesterConfig[];
+  startDate?: string;
+  endDate?: string;
+  isLocked?: boolean;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudentMutation {
+  id: string;
+  studentId: string;
+  studentName: string;
+  nisn?: string;
+  type: 'masuk' | 'keluar';
+  date: string;
+  previousSchool?: string; // Untuk mutasi masuk
+  targetSchool?: string; // Untuk mutasi keluar
+  classId: string;
+  className: string;
+  academicYear: string;
+  semester: 'Ganjil' | 'Genap';
+  reason: string;
+  letterNumber?: string; // Nomor Surat Keterangan Pindah
+  notes?: string;
+  createdAt?: string;
+}
+
+export interface StudentAchievement {
+  id: string;
+  studentId: string;
+  studentName: string;
+  nisn?: string;
+  className?: string;
+  title: string; // Nama kejuaraan / penghargaan
+  type: 'Akademik' | 'Non-Akademik';
+  level: 'Sekolah' | 'Kecamatan' | 'Kabupaten' | 'Provinsi' | 'Nasional' | 'Internasional';
+  rank: string; // Juara 1, Medali Emas, dll.
+  year: string;
+  organizer?: string;
+  certificateNumber?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
+export interface KokurikulerProject {
+  id: string;
+  title: string;
+  theme: string; // Tema P5 (Kearifan Lokal, Bhinneka Tunggal Ika, dll.)
+  gradeLevel: '7' | '8' | '9';
+  classId?: string;
+  academicYear: string;
+  semester: 'Ganjil' | 'Genap';
+  description: string;
+  facilitatorName?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
+

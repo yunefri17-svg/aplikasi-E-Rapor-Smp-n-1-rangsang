@@ -24,6 +24,7 @@ import {
   ShieldAlert,
   Settings,
   Award,
+  Calendar,
   X
 } from 'lucide-react';
 import { UserRole } from '../../types/erapor';
@@ -31,6 +32,8 @@ import { UserRole } from '../../types/erapor';
 export type MenuId =
   | 'dashboard'
   | 'data-referensi'
+  | 'buku-induk'
+  | 'manajemen-tahun-ajaran'
   | 'data-sekolah'
   | 'data-guru'
   | 'data-siswa'
@@ -48,6 +51,7 @@ export type MenuId =
   | 'rekap-nilai'
   | 'leger-nilai'
   | 'pengolahan-rapor'
+  | 'transkrip-nilai'
   | 'kenaikan-kelas'
   | 'cetak-rapor'
   | 'laporan-sekolah'
@@ -106,6 +110,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       groupTitle: 'DATA MASTER & AKADEMIK',
       items: [
+        { id: 'buku-induk', label: 'Buku Induk Siswa', icon: BookOpen, badge: counts?.students, roles: ['admin', 'guru', 'walikelas', 'kepsek'] },
+        { id: 'manajemen-tahun-ajaran', label: 'Manajemen Tahun Ajaran', icon: Calendar, roles: ['admin', 'kepsek'] },
         { id: 'data-sekolah', label: '3. Data Sekolah', icon: School, roles: ['admin', 'kepsek'] },
         { id: 'data-guru', label: '4. Data Guru & GTK', icon: UserCheck, badge: counts?.teachers, roles: ['admin', 'kepsek'] },
         { id: 'data-siswa', label: '5. Data Siswa', icon: GraduationCap, badge: counts?.students, roles: ['admin', 'guru', 'walikelas', 'kepsek'] },
@@ -142,7 +148,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { id: 'leger-nilai', label: '16. Leger Nilai', icon: Files, roles: ['admin', 'walikelas', 'kepsek'] },
         { id: 'pengolahan-rapor', label: '17. Pengolahan Rapor', icon: FileCheck, roles: ['admin', 'walikelas', 'kepsek'] },
-        { id: 'kenaikan-kelas', label: '18. Kenaikan Kelas', icon: TrendingUp, roles: ['admin', 'walikelas', 'kepsek'] },
+        { id: 'transkrip-nilai', label: 'Transkrip Nilai (6 Sem)', icon: FileSpreadsheet, roles: ['admin', 'walikelas', 'kepsek', 'guru'] },
+        { id: 'kenaikan-kelas', label: '18. Kenaikan & Mutasi Siswa', icon: TrendingUp, roles: ['admin', 'walikelas', 'kepsek'] },
         { id: 'cetak-rapor', label: '19. Cetak Rapor (PDF)', icon: Printer, roles: ['admin', 'walikelas', 'kepsek'] }
       ]
     },
@@ -172,7 +179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <aside
         className={`fixed top-0 left-0 h-screen w-72 bg-slate-900 text-slate-300 z-50 flex flex-col transition-transform duration-300 ease-in-out ${
           isOpenMobile ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-        } border-r border-slate-800 shadow-xl`}
+        } border-r border-slate-800 shadow-xl print:hidden`}
       >
         {/* Top Branding */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">

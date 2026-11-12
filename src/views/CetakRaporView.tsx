@@ -808,40 +808,9 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
         {/* ========================================================= */}
         {(activePreviewPage === 'grades' || activePreviewPage === 'all') && (
           <div className="w-full max-w-4xl bg-white text-slate-900 border border-slate-300 shadow-lg rounded-2xl p-8 sm:p-12 print:p-0 print:border-none print:shadow-none space-y-6 text-xs relative">
-            {/* KOP SEKOLAH RESMI */}
-            <div className="text-center space-y-1 relative pb-3 border-b-2 border-slate-900">
-              <div className="flex items-center justify-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center border border-slate-300 text-blue-900 font-black text-xl">
-                  SMP
-                </div>
-                <div>
-                  <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800">
-                    PEMERINTAH KABUPATEN KEPULAUAN MERANTI
-                  </h3>
-                  <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800">
-                    DINAS PENDIDIKAN DAN KEBUDAYAAN
-                  </h4>
-                  <h2 className="text-base sm:text-lg font-black uppercase text-slate-950 tracking-tight">
-                    {school.name}
-                  </h2>
-                  <p className="text-[10px] text-slate-600">
-                    {school.address}, Kec. {school.kecamatan}, Kab. {school.kabupaten}, Prov. {school.provinsi} &bull; Kode Pos: {school.postalCode}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    NPSN: {school.npsn} &bull; Email: {school.email} &bull; Website: {school.website}
-                  </p>
-                </div>
-              </div>
-              {/* Double divider line */}
-              <div className="pt-2">
-                <div className="border-t border-slate-900 mb-0.5"></div>
-                <div className="border-t-2 border-slate-900"></div>
-              </div>
-            </div>
-
-            {/* JUDUL RAPOR */}
-            <div className="text-center space-y-0.5">
-              <h1 className="text-sm sm:text-base font-black tracking-wide uppercase">
+            {/* JUDUL RAPOR (Standar Kurikulum Merdeka - Tanpa Kop Surat di Halaman Nilai) */}
+            <div className="text-center space-y-1 pt-2 pb-1">
+              <h1 className="text-sm sm:text-base font-black tracking-wide uppercase text-slate-900">
                 LAPORAN HASIL BELAJAR PESERTA DIDIK (RAPOR)
               </h1>
               <p className="text-xs font-semibold text-slate-700">
@@ -1025,19 +994,40 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
             </div>
 
             {/* Keputusan Kenaikan Kelas jika Semester Genap */}
-            {semester === 'Genap' && (
-              <div className="space-y-1.5">
-                <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
-                  E. Keputusan Kenaikan Kelas / Kelulusan
-                </h3>
-                <div className="border-2 border-slate-800 p-3 rounded text-xs font-bold bg-slate-50 text-slate-900">
-                  Berdasarkan pencapaian seluruh tujuan pembelajaran, peserta didik ditetapkan:{' '}
-                  <span className="text-emerald-700 uppercase">
-                    {studentNote?.promotionDecision || 'NAIK KE KELAS BERIKUTNYA'}
-                  </span>
+            {semester === 'Genap' && (() => {
+              const currentGrade = classroom.gradeLevel || '7';
+              const defaultPromotion =
+                currentGrade === '7'
+                  ? 'NAIK KE KELAS VIII'
+                  : currentGrade === '8'
+                  ? 'NAIK KE KELAS IX'
+                  : 'LULUS DARI SATUAN PENDIDIKAN';
+              const rawDecision = studentNote?.promotionDecision;
+              const decisionText =
+                rawDecision && rawDecision !== 'Belum Ditentukan'
+                  ? rawDecision.toUpperCase()
+                  : defaultPromotion;
+              const isTinggalOrGagal =
+                decisionText.startsWith('TINGGAL') || decisionText.startsWith('TIDAK');
+
+              return (
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
+                    E. Keputusan Kenaikan Kelas / Kelulusan
+                  </h3>
+                  <div className={`border-2 p-3 rounded text-xs font-bold ${
+                    isTinggalOrGagal
+                      ? 'border-rose-700 bg-rose-50/60 text-slate-900'
+                      : 'border-slate-800 bg-slate-50 text-slate-900'
+                  }`}>
+                    Berdasarkan pencapaian seluruh tujuan pembelajaran, peserta didik ditetapkan:{' '}
+                    <span className={isTinggalOrGagal ? 'text-rose-700 uppercase font-black' : 'text-emerald-700 uppercase font-black'}>
+                      {decisionText}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* TANDA TANGAN RESMI PENGESAHAN */}
             <div className="pt-6 space-y-8">

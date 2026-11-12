@@ -18,7 +18,11 @@ import {
   FormativeAssessment,
   SummativeAssessment,
   KKTPConfig,
-  SubjectFinalScoreConfig
+  SubjectFinalScoreConfig,
+  AcademicYearPeriod,
+  StudentMutation,
+  StudentAchievement,
+  KokurikulerProject
 } from '../types/erapor';
 import {
   initialSchoolProfile,
@@ -39,7 +43,11 @@ import {
   initialFormativeAssessments,
   initialSummativeAssessments,
   initialKKTPConfigs,
-  initialFinalScoreConfigs
+  initialFinalScoreConfigs,
+  initialAcademicYears,
+  initialStudentMutations,
+  initialStudentAchievements,
+  initialKokurikulerProjects
 } from '../data/initialData';
 import { syncProfileAcademicYear } from '../utils/academicYear';
 import { sortClassrooms } from '../utils/classroomSort';
@@ -70,6 +78,11 @@ export interface AppDatabase {
   summativeAssessments: SummativeAssessment[];
   kktpConfigs: KKTPConfig[];
   finalScoreConfigs: SubjectFinalScoreConfig[];
+  // Continuous Academic Administration
+  academicYears: AcademicYearPeriod[];
+  studentMutations: StudentMutation[];
+  studentAchievements: StudentAchievement[];
+  kokurikulerProjects: KokurikulerProject[];
 }
 
 
@@ -130,7 +143,11 @@ export const loadDatabase = (): AppDatabase => {
         formativeAssessments: initialFormativeAssessments,
         summativeAssessments: initialSummativeAssessments,
         kktpConfigs: initialKKTPConfigs,
-        finalScoreConfigs: initialFinalScoreConfigs
+        finalScoreConfigs: initialFinalScoreConfigs,
+        academicYears: initialAcademicYears,
+        studentMutations: initialStudentMutations,
+        studentAchievements: initialStudentAchievements,
+        kokurikulerProjects: initialKokurikulerProjects
       };
       saveDatabase(initialDb);
       return initialDb;
@@ -227,7 +244,11 @@ export const loadDatabase = (): AppDatabase => {
         formativeAssessments: parsed.formativeAssessments?.length ? parsed.formativeAssessments : initialFormativeAssessments,
         summativeAssessments: parsed.summativeAssessments?.length ? parsed.summativeAssessments : initialSummativeAssessments,
         kktpConfigs: parsed.kktpConfigs?.length ? parsed.kktpConfigs : initialKKTPConfigs,
-        finalScoreConfigs: parsed.finalScoreConfigs?.length ? parsed.finalScoreConfigs : initialFinalScoreConfigs
+        finalScoreConfigs: parsed.finalScoreConfigs?.length ? parsed.finalScoreConfigs : initialFinalScoreConfigs,
+        academicYears: parsed.academicYears?.length ? parsed.academicYears : initialAcademicYears,
+        studentMutations: parsed.studentMutations?.length ? parsed.studentMutations : initialStudentMutations,
+        studentAchievements: parsed.studentAchievements?.length ? parsed.studentAchievements : initialStudentAchievements,
+        kokurikulerProjects: parsed.kokurikulerProjects?.length ? parsed.kokurikulerProjects : initialKokurikulerProjects
       })
     );
 
@@ -256,7 +277,11 @@ export const loadDatabase = (): AppDatabase => {
       formativeAssessments: [],
       summativeAssessments: [],
       kktpConfigs: [],
-      finalScoreConfigs: []
+      finalScoreConfigs: [],
+      academicYears: initialAcademicYears,
+      studentMutations: initialStudentMutations,
+      studentAchievements: initialStudentAchievements,
+      kokurikulerProjects: initialKokurikulerProjects
     };
   }
 };

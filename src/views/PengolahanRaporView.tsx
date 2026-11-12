@@ -9,7 +9,7 @@ import {
   HomeroomNote,
   User
 } from '../types/erapor';
-import { FileCheck, CheckCircle2, AlertCircle, Edit3, Save, Check, Printer, ArrowRight, Lock } from 'lucide-react';
+import { FileCheck, CheckCircle2, AlertCircle, Edit3, Save, Check, Printer, ArrowRight, Lock, TrendingUp } from 'lucide-react';
 import { MenuId } from '../components/layout/Sidebar';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
@@ -74,6 +74,14 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
   }
 
   const classStudents = students.filter((s) => s.classId === selectedClass);
+  const currentClassObj = classrooms.find((c) => c.id === selectedClass);
+  const gradeLevel = currentClassObj?.gradeLevel || '7';
+  const defaultTargetDecision =
+    gradeLevel === '7'
+      ? 'Naik ke Kelas VIII'
+      : gradeLevel === '8'
+      ? 'Naik ke Kelas IX'
+      : 'Lulus';
 
   // Local state for homeroom notes
   const [notesState, setNotesState] = useState<Record<string, HomeroomNote>>(() => {
@@ -98,7 +106,7 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
       growthNote: 'Menunjukkan perkembangan karakter dan kedisiplinan yang baik selama proses pembelajaran.',
       achievementNote: '-',
       suggestions: 'Tingkatkan konsistensi belajar mandiri di rumah dan perluas membaca buku referensi.',
-      promotionDecision: 'Belum Ditentukan'
+      promotionDecision: defaultTargetDecision as any
     };
   };
 
@@ -295,6 +303,49 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Keputusan Kenaikan Kelas / Kelulusan (Semester 2 / Genap) */}
+              {semester === 'Genap' && (
+                <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+                  <div>
+                    <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                      <TrendingUp className="w-4 h-4 text-blue-600" />
+                      Keputusan Kenaikan Kelas / Kelulusan (Semester 2 / Genap):
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Otomatis dicetak resmi pada bagian E. Keputusan Kenaikan Kelas lembar rapor siswa.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={note.promotionDecision && note.promotionDecision !== 'Belum Ditentukan' ? note.promotionDecision : defaultTargetDecision}
+                      onChange={(e) => handleUpdateNote(std.id, 'promotionDecision', e.target.value)}
+                      className={`px-3 py-1.5 rounded-lg border font-bold text-xs bg-white shadow-xs focus:ring-2 focus:ring-blue-500 ${
+                        (note.promotionDecision || '').startsWith('Tinggal') || (note.promotionDecision || '').startsWith('Tidak')
+                          ? 'border-rose-300 text-rose-700 bg-rose-50/50'
+                          : 'border-emerald-300 text-emerald-800 bg-emerald-50/50'
+                      }`}
+                    >
+                      {gradeLevel === '7' ? (
+                        <>
+                          <option value="Naik ke Kelas VIII">Naik ke Kelas VIII (Rekomendasi Otomatis)</option>
+                          <option value="Tinggal di Kelas VII">Tinggal di Kelas VII</option>
+                        </>
+                      ) : gradeLevel === '8' ? (
+                        <>
+                          <option value="Naik ke Kelas IX">Naik ke Kelas IX (Rekomendasi Otomatis)</option>
+                          <option value="Tinggal di Kelas VIII">Tinggal di Kelas VIII</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="Lulus">Lulus dari Satuan Pendidikan (Rekomendasi Otomatis)</option>
+                          <option value="Tidak Lulus">Tidak Lulus</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

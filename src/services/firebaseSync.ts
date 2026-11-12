@@ -33,7 +33,11 @@ import {
   FormativeAssessment,
   SummativeAssessment,
   KKTPConfig,
-  SubjectFinalScoreConfig
+  SubjectFinalScoreConfig,
+  AcademicYearPeriod,
+  StudentMutation,
+  StudentAchievement,
+  KokurikulerProject
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 
@@ -576,8 +580,28 @@ export async function syncAllToFirestore(
         reportOps.push({ ref: doc(db, 'users', sanitizeDocId(u.id)), data: u });
       }
     });
+    if (dbData.academicYears) {
+      dbData.academicYears.forEach((ay) => {
+        reportOps.push({ ref: doc(db, 'academic_years', sanitizeDocId(ay.id)), data: ay });
+      });
+    }
+    if (dbData.studentMutations) {
+      dbData.studentMutations.forEach((sm) => {
+        reportOps.push({ ref: doc(db, 'student_mutations', sanitizeDocId(sm.id)), data: sm });
+      });
+    }
+    if (dbData.studentAchievements) {
+      dbData.studentAchievements.forEach((sa) => {
+        reportOps.push({ ref: doc(db, 'student_achievements', sanitizeDocId(sa.id)), data: sa });
+      });
+    }
+    if (dbData.kokurikulerProjects) {
+      dbData.kokurikulerProjects.forEach((kp) => {
+        reportOps.push({ ref: doc(db, 'kokurikuler_projects', sanitizeDocId(kp.id)), data: kp });
+      });
+    }
 
-    await commitInBatches(reportOps, 'Mengunggah data rapor');
+    await commitInBatches(reportOps, 'Mengunggah data rapor & administrasi akademik');
 
     // 5. Master App State Metadata (5/5)
     onProgress?.('Menyelesaikan metadata status aplikasi (5/5)...');
@@ -845,6 +869,10 @@ export interface FirestoreRealtimePayload {
   schoolProfile?: SchoolProfile[];
   extracurriculars?: Extracurricular[];
   studentExtracurriculars?: StudentExtracurricular[];
+  academicYears?: AcademicYearPeriod[];
+  studentMutations?: StudentMutation[];
+  studentAchievements?: StudentAchievement[];
+  kokurikulerProjects?: KokurikulerProject[];
   removedDocIds?: Record<string, string[]>;
 }
 
@@ -916,6 +944,10 @@ export function listenToFirestoreRealtime(
     genericListener('schools', 'schoolProfile'),
     genericListener('extracurriculars', 'extracurriculars'),
     genericListener('student_extracurriculars', 'studentExtracurriculars'),
+    genericListener('academic_years', 'academicYears'),
+    genericListener('student_mutations', 'studentMutations'),
+    genericListener('student_achievements', 'studentAchievements'),
+    genericListener('kokurikuler_projects', 'kokurikulerProjects'),
     onSnapshot(doc(db, 'application_settings', 'tombstones'), (snap) => {
       if (snap.exists()) {
         updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
