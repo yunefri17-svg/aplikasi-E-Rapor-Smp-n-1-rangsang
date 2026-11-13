@@ -34,7 +34,13 @@ import {
   SubjectFinalScoreConfig,
   AcademicYearPeriod,
   StudentMutation,
-  StudentAchievement
+  StudentAchievement,
+  KokurikulerDimensionMaster,
+  KokurikulerThemeMaster,
+  KokurikulerGroup,
+  KokurikulerActivity,
+  KokurikulerScore,
+  KokurikulerDescription
 } from './types/erapor';
 import { Calendar } from 'lucide-react';
 import {
@@ -55,6 +61,8 @@ import {
   subscribeToSyncState,
   listenToFirestoreRealtime,
   saveScoresToFirestoreDirect,
+  saveKokurikulerScoresDirect,
+  saveKokurikulerDescriptionsDirect,
   deleteDocFromFirestore,
   surgicalSync,
   reconnectToCloud,
@@ -104,6 +112,11 @@ import { KKTPConfigView } from './views/KKTPConfigView';
 import { AsesmenFormatifView } from './views/AsesmenFormatifView';
 import { AsesmenSumatifView } from './views/AsesmenSumatifView';
 import { PengolahanNilaiAkhirView } from './views/PengolahanNilaiAkhirView';
+
+// Modul Penilaian Kokurikuler (e-Rapor SMP Kemendikdasmen 2025.2 / BSKAP 058/H/KR/2025)
+import { KokurikulerDataView } from './views/kokurikuler/KokurikulerDataView';
+import { KokurikulerNilaiView } from './views/kokurikuler/KokurikulerNilaiView';
+import { KokurikulerLaporanView } from './views/kokurikuler/KokurikulerLaporanView';
 
 
 const EMPTY_ARRAY: any[] = [];
@@ -372,6 +385,12 @@ export default function App() {
         mergeList('studentMutations', payload.studentMutations);
         mergeList('studentAchievements', payload.studentAchievements);
         mergeList('kokurikulerProjects', payload.kokurikulerProjects);
+        mergeList('kokurikulerDimensions', payload.kokurikulerDimensions);
+        mergeList('kokurikulerThemes', payload.kokurikulerThemes);
+        mergeList('kokurikulerGroups', payload.kokurikulerGroups);
+        mergeList('kokurikulerActivities', payload.kokurikulerActivities);
+        mergeList('kokurikulerScores', payload.kokurikulerScores);
+        mergeList('kokurikulerDescriptions', payload.kokurikulerDescriptions);
 
         if (changed) {
           const finalDb = syncUsersWithTeachers(updated);
@@ -451,7 +470,27 @@ export default function App() {
                 kktpConfigs: remoteData.kktpConfigs !== undefined ? remoteData.kktpConfigs : prev.kktpConfigs,
                 finalScoreConfigs: remoteData.finalScoreConfigs !== undefined ? remoteData.finalScoreConfigs : prev.finalScoreConfigs,
                 extracurriculars: remoteData.extracurriculars !== undefined ? remoteData.extracurriculars : prev.extracurriculars,
-                studentExtracurriculars: remoteData.studentExtracurriculars !== undefined ? remoteData.studentExtracurriculars : prev.studentExtracurriculars
+                studentExtracurriculars: remoteData.studentExtracurriculars !== undefined ? remoteData.studentExtracurriculars : prev.studentExtracurriculars,
+                kokurikulerDimensions:
+                  remoteData.kokurikulerDimensions && remoteData.kokurikulerDimensions.length > 0
+                    ? remoteData.kokurikulerDimensions
+                    : prev.kokurikulerDimensions,
+                kokurikulerThemes:
+                  remoteData.kokurikulerThemes && remoteData.kokurikulerThemes.length > 0
+                    ? remoteData.kokurikulerThemes
+                    : prev.kokurikulerThemes,
+                kokurikulerGroups: (
+                  remoteData.kokurikulerGroups !== undefined ? remoteData.kokurikulerGroups : (prev.kokurikulerGroups || [])
+                ).filter((g) => g && g.id && !isEntityDeleted('kokurikulerGroups', g.id)),
+                kokurikulerActivities: (
+                  remoteData.kokurikulerActivities !== undefined ? remoteData.kokurikulerActivities : (prev.kokurikulerActivities || [])
+                ).filter((a) => a && a.id && !isEntityDeleted('kokurikulerActivities', a.id)),
+                kokurikulerScores:
+                  remoteData.kokurikulerScores !== undefined ? remoteData.kokurikulerScores : prev.kokurikulerScores,
+                kokurikulerDescriptions:
+                  remoteData.kokurikulerDescriptions !== undefined
+                    ? remoteData.kokurikulerDescriptions
+                    : prev.kokurikulerDescriptions
               };
               const cleaned = sanitizeTeachingAssignments(syncUsersWithTeachers(merged));
 
@@ -1294,6 +1333,181 @@ export default function App() {
     setActiveMenu('cetak-rapor');
   };
 
+  // ============================================================================
+  // Handlers for Modul Kokurikuler (Verified Firebase Sync)
+  // ============================================================================
+  const handleSaveKokurikulerGroup = async (
+    group: KokurikulerGroup
+  ): Promise<{ success: boolean; error?: string }> => {
+    removeDeletedEntityId('kokurikulerGroups', group.id);
+    const syncRes = await surgicalSync('kokurikuler_groups', group.id, group);
+    if (!syncRes.success || syncRes.quotaExceeded) {
+      return {
+        success: false,
+        error:
+          syncRes.error ||
+          'Kuota harian Firebase tercapai. Data belum tersinkronisasi ke Cloud Firestore.'
+      };
+    }
+    updateDbAndSave(
+      (prev) => {
+        const list = [...(prev.kokurikulerGroups || [])];
+        const idx = list.findIndex((g) => g.id === group.id);
+        if (idx >= 0) list[idx] = group;
+        else list.push(group);
+        return { ...prev, kokurikulerGroups: list };
+      },
+      true
+    );
+    logActivity(currentUser, 'Simpan Kelompok Kokurikuler', `Menyimpan kelompok kokurikuler: ${group.name} (${group.code})`);
+    return { success: true };
+  };
+
+  const handleDeleteKokurikulerGroup = async (
+    groupId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    addDeletedEntityId('kokurikulerGroups', groupId);
+    const deleted = await deleteDocFromFirestore('kokurikuler_groups', groupId);
+    if (!deleted) {
+      return { success: false, error: 'Gagal menghapus kelompok kokurikuler dari Firebase Firestore.' };
+    }
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        kokurikulerGroups: (prev.kokurikulerGroups || []).filter((g) => g.id !== groupId)
+      }),
+      true
+    );
+    logActivity(currentUser, 'Hapus Kelompok Kokurikuler', `Menghapus kelompok kokurikuler ID: ${groupId}`);
+    return { success: true };
+  };
+
+  const handleSaveKokurikulerActivity = async (
+    activity: KokurikulerActivity
+  ): Promise<{ success: boolean; error?: string }> => {
+    removeDeletedEntityId('kokurikulerActivities', activity.id);
+    const syncRes = await surgicalSync('kokurikuler_activities', activity.id, activity);
+    if (!syncRes.success || syncRes.quotaExceeded) {
+      return {
+        success: false,
+        error:
+          syncRes.error ||
+          'Kuota harian Firebase tercapai. Data kegiatan belum tersimpan ke Cloud Firestore.'
+      };
+    }
+    updateDbAndSave(
+      (prev) => {
+        const list = [...(prev.kokurikulerActivities || [])];
+        const idx = list.findIndex((a) => a.id === activity.id);
+        if (idx >= 0) list[idx] = activity;
+        else list.push(activity);
+        return { ...prev, kokurikulerActivities: list };
+      },
+      true
+    );
+    logActivity(currentUser, 'Simpan Kegiatan Kokurikuler', `Menyimpan kegiatan kokurikuler: ${activity.name}`);
+    return { success: true };
+  };
+
+  const handleDeleteKokurikulerActivity = async (
+    activityId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    addDeletedEntityId('kokurikulerActivities', activityId);
+    const deleted = await deleteDocFromFirestore('kokurikuler_activities', activityId);
+    if (!deleted) {
+      return { success: false, error: 'Gagal menghapus kegiatan kokurikuler dari Firebase Firestore.' };
+    }
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        kokurikulerActivities: (prev.kokurikulerActivities || []).filter((a) => a.id !== activityId)
+      }),
+      true
+    );
+    logActivity(currentUser, 'Hapus Kegiatan Kokurikuler', `Menghapus kegiatan kokurikuler ID: ${activityId}`);
+    return { success: true };
+  };
+
+  const handleSaveKokurikulerDimensions = async (
+    dims: KokurikulerDimensionMaster[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    for (const d of dims) {
+      const res = await surgicalSync('kokurikuler_dimensions', d.id, d);
+      if (!res.success || res.quotaExceeded) {
+        return {
+          success: false,
+          error: res.error || 'Gagal menyimpan referensi dimensi Profil Lulusan ke Firebase.'
+        };
+      }
+    }
+    updateDbAndSave((prev) => ({ ...prev, kokurikulerDimensions: dims }), true);
+    logActivity(currentUser, 'Simpan Referensi Dimensi Kokurikuler', `Memperbarui status master ${dims.length} dimensi Profil Lulusan.`);
+    return { success: true };
+  };
+
+  const handleSaveKokurikulerThemes = async (
+    themes: KokurikulerThemeMaster[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    for (const t of themes) {
+      const res = await surgicalSync('kokurikuler_themes', t.id, t);
+      if (!res.success || res.quotaExceeded) {
+        return {
+          success: false,
+          error: res.error || 'Gagal menyimpan referensi tema kokurikuler ke Firebase.'
+        };
+      }
+    }
+    updateDbAndSave((prev) => ({ ...prev, kokurikulerThemes: themes }), true);
+    logActivity(currentUser, 'Simpan Tema Kokurikuler', `Memperbarui ${themes.length} tema kegiatan kokurikuler.`);
+    return { success: true };
+  };
+
+  const handleSaveKokurikulerScores = async (
+    newScores: KokurikulerScore[]
+  ): Promise<{ success: boolean; count: number; error?: string }> => {
+    const res = await saveKokurikulerScoresDirect(newScores);
+    if (!res.success) {
+      return {
+        success: false,
+        count: 0,
+        error: res.error || 'Gagal menyimpan capaian kokurikuler ke Firebase Firestore.'
+      };
+    }
+    updateDbAndSave(
+      (prev) => {
+        const map = new Map((prev.kokurikulerScores || []).map((s) => [s.id, s]));
+        newScores.forEach((sc) => map.set(sc.id, sc));
+        return { ...prev, kokurikulerScores: Array.from(map.values()) };
+      },
+      true
+    );
+    logActivity(currentUser, 'Simpan Nilai Kokurikuler', `Menyimpan ${newScores.length} capaian subdimensi kokurikuler ke Firebase.`);
+    return { success: true, count: res.count };
+  };
+
+  const handleSaveKokurikulerDescriptions = async (
+    newDescs: KokurikulerDescription[]
+  ): Promise<{ success: boolean; count: number; error?: string }> => {
+    const res = await saveKokurikulerDescriptionsDirect(newDescs);
+    if (!res.success) {
+      return {
+        success: false,
+        count: 0,
+        error: res.error || 'Gagal menyimpan deskripsi kokurikuler ke Firebase Firestore.'
+      };
+    }
+    updateDbAndSave(
+      (prev) => {
+        const map = new Map((prev.kokurikulerDescriptions || []).map((d) => [d.id, d]));
+        newDescs.forEach((d) => map.set(d.id, d));
+        return { ...prev, kokurikulerDescriptions: Array.from(map.values()) };
+      },
+      true
+    );
+    logActivity(currentUser, 'Simpan Deskripsi Kokurikuler', `Menyimpan ${newDescs.length} deskripsi rapor kokurikuler ke Firebase.`);
+    return { success: true, count: res.count };
+  };
+
   // If user is not authenticated or not logged in, show official Login View
   if (!isAuthenticated || !currentUser) {
     return (
@@ -1592,6 +1806,127 @@ export default function App() {
             />
           )}
 
+          {(activeMenu === 'kokurikuler-kelompok' ||
+            activeMenu === 'kokurikuler-kegiatan' ||
+            activeMenu === 'kokurikuler-profil') && (
+            <KokurikulerDataView
+              activeTab={
+                activeMenu === 'kokurikuler-kelompok'
+                  ? 'kelompok'
+                  : activeMenu === 'kokurikuler-kegiatan'
+                  ? 'kegiatan'
+                  : 'profil-lulusan'
+              }
+              onChangeTab={(tab) =>
+                handleSelectMenu(
+                  tab === 'kelompok'
+                    ? 'kokurikuler-kelompok'
+                    : tab === 'kegiatan'
+                    ? 'kokurikuler-kegiatan'
+                    : 'kokurikuler-profil'
+                )
+              }
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              currentUser={effectiveUser}
+              teachers={db.teachers}
+              students={db.students}
+              classrooms={db.classrooms}
+              dimensions={db.kokurikulerDimensions || EMPTY_ARRAY}
+              themes={db.kokurikulerThemes || EMPTY_ARRAY}
+              groups={db.kokurikulerGroups || EMPTY_ARRAY}
+              activities={db.kokurikulerActivities || EMPTY_ARRAY}
+              scores={db.kokurikulerScores || EMPTY_ARRAY}
+              descriptions={db.kokurikulerDescriptions || EMPTY_ARRAY}
+              onSaveGroup={handleSaveKokurikulerGroup}
+              onDeleteGroup={handleDeleteKokurikulerGroup}
+              onSaveActivity={handleSaveKokurikulerActivity}
+              onDeleteActivity={handleDeleteKokurikulerActivity}
+              onSaveDimensions={handleSaveKokurikulerDimensions}
+              onSaveThemes={handleSaveKokurikulerThemes}
+            />
+          )}
+
+          {(activeMenu === 'kokurikuler-input' ||
+            activeMenu === 'kokurikuler-import' ||
+            activeMenu === 'kokurikuler-deskripsi') && (
+            effectiveUser.role === 'admin' ||
+            effectiveUser.role === 'guru' ||
+            effectiveUser.role === 'walikelas' ? (
+              <KokurikulerNilaiView
+                activeTab={
+                  activeMenu === 'kokurikuler-input'
+                    ? 'input'
+                    : activeMenu === 'kokurikuler-import'
+                    ? 'import'
+                    : 'deskripsi'
+                }
+                onChangeTab={(tab) =>
+                  handleSelectMenu(
+                    tab === 'input'
+                      ? 'kokurikuler-input'
+                      : tab === 'import'
+                      ? 'kokurikuler-import'
+                      : 'kokurikuler-deskripsi'
+                  )
+                }
+                onBackToData={() => handleSelectMenu('kokurikuler-kelompok')}
+                schoolName={db.schoolProfile.name}
+                academicYear={db.schoolProfile.activeAcademicYear}
+                semester={db.schoolProfile.activeSemester}
+                currentUser={effectiveUser}
+                students={db.students}
+                classrooms={db.classrooms}
+                dimensions={db.kokurikulerDimensions || EMPTY_ARRAY}
+                groups={db.kokurikulerGroups || EMPTY_ARRAY}
+                activities={db.kokurikulerActivities || EMPTY_ARRAY}
+                scores={db.kokurikulerScores || EMPTY_ARRAY}
+                descriptions={db.kokurikulerDescriptions || EMPTY_ARRAY}
+                onSaveScores={handleSaveKokurikulerScores}
+                onSaveDescriptions={handleSaveKokurikulerDescriptions}
+              />
+            ) : (
+              <SecurityAccessDenied
+                currentUser={effectiveUser}
+                customMessage="Akses Ditolak: Penginputan & Deskripsi Nilai Kokurikuler hanya diperuntukkan bagi Koordinator/Guru Penilai, Wali Kelas, dan Administrator."
+              />
+            )
+          )}
+
+          {(activeMenu === 'kokurikuler-rekap-siswa' ||
+            activeMenu === 'kokurikuler-rekap-kelompok' ||
+            activeMenu === 'kokurikuler-cetak') && (
+            <KokurikulerLaporanView
+              activeTab={
+                activeMenu === 'kokurikuler-rekap-siswa'
+                  ? 'rekap-siswa'
+                  : activeMenu === 'kokurikuler-rekap-kelompok'
+                  ? 'rekap-kelompok'
+                  : 'cetak-laporan'
+              }
+              onChangeTab={(tab) =>
+                handleSelectMenu(
+                  tab === 'rekap-siswa'
+                    ? 'kokurikuler-rekap-siswa'
+                    : tab === 'rekap-kelompok'
+                    ? 'kokurikuler-rekap-kelompok'
+                    : 'kokurikuler-cetak'
+                )
+              }
+              school={db.schoolProfile}
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              currentUser={effectiveUser}
+              students={db.students}
+              classrooms={db.classrooms}
+              dimensions={db.kokurikulerDimensions || EMPTY_ARRAY}
+              groups={db.kokurikulerGroups || EMPTY_ARRAY}
+              activities={db.kokurikulerActivities || EMPTY_ARRAY}
+              scores={db.kokurikulerScores || EMPTY_ARRAY}
+              descriptions={db.kokurikulerDescriptions || EMPTY_ARRAY}
+            />
+          )}
+
           {activeMenu === 'input-nilai' && (
             <InputNilaiView
               classrooms={db.classrooms}
@@ -1742,6 +2077,10 @@ export default function App() {
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
+              kokurikulerGroups={db.kokurikulerGroups || EMPTY_ARRAY}
+              kokurikulerActivities={db.kokurikulerActivities || EMPTY_ARRAY}
+              kokurikulerDescriptions={db.kokurikulerDescriptions || EMPTY_ARRAY}
+              kokurikulerScores={db.kokurikulerScores || EMPTY_ARRAY}
             />
           )}
 

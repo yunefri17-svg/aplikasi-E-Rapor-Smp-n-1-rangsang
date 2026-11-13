@@ -3,16 +3,254 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Audit logs: append-only, cannot be edited or deleted (anti-tamper)
+    // Default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers for Kokurikuler validation & integrity
+    function isValidKokId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 256 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStrBounded(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidSemester(sem) {
+      return sem in ['Ganjil', 'Genap'];
+    }
+
+    function isValidKokLevel(lv) {
+      return lv in ['Berkembang', 'Cakap', 'Mahir'];
+    }
+
+    function isGroupAssessmentUnlocked(groupId) {
+      return !exists(/databases/$(database)/documents/kokurikuler_groups/$(groupId))
+        || get(/databases/$(database)/documents/kokurikuler_groups/$(groupId)).data.get('isAssessmentLocked', false) != true;
+    }
+
+    function isValidKokDimension(data) {
+      return data.keys().hasAll(['id', 'order', 'name', 'shortName', 'description', 'subdimensions'])
+        && data.keys().hasOnly(['id', 'order', 'name', 'shortName', 'description', 'subdimensions', 'isLocked', 'updatedAt'])
+        && isValidKokId(data.id)
+        && data.order is int && data.order >= 1 && data.order <= 20
+        && isStrBounded(data.name, 2, 200)
+        && isStrBounded(data.shortName, 2, 120)
+        && isStrBounded(data.description, 2, 1000)
+        && data.subdimensions is list && data.subdimensions.size() >= 1 && data.subdimensions.size() <= 15
+        && (!('isLocked' in data) || data.isLocked is bool)
+        && (!('updatedAt' in data) || isStrBounded(data.updatedAt, 0, 64));
+    }
+
+    function isValidKokTheme(data) {
+      return data.keys().hasAll(['id', 'name', 'isActive'])
+        && data.keys().hasOnly(['id', 'name', 'description', 'isActive'])
+        && isValidKokId(data.id)
+        && isStrBounded(data.name, 2, 200)
+        && (!('description' in data) || isStrBounded(data.description, 0, 1000))
+        && data.isActive is bool;
+    }
+
+    function isValidKokGroup(data) {
+      return data.keys().hasAll([
+          'id', 'code', 'name', 'academicYear', 'semester', 'theme', 'phase',
+          'classIds', 'coordinatorTeacherId', 'involvedTeacherIds', 'studentIds',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'schoolId', 'code', 'name', 'academicYear', 'semester', 'theme', 'phase',
+          'classIds', 'coordinatorTeacherId', 'coordinatorName', 'involvedTeacherIds',
+          'involvedTeacherDimensions', 'studentIds', 'status', 'isAssessmentLocked',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidKokId(data.id)
+        && (!('schoolId' in data) || isStrBounded(data.schoolId, 0, 100))
+        && isStrBounded(data.code, 1, 60)
+        && isStrBounded(data.name, 2, 200)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isStrBounded(data.theme, 2, 200)
+        && isStrBounded(data.phase, 1, 80)
+        && data.classIds is list && data.classIds.size() <= 50
+        && isStrBounded(data.coordinatorTeacherId, 1, 128)
+        && (!('coordinatorName' in data) || isStrBounded(data.coordinatorName, 0, 200))
+        && data.involvedTeacherIds is list && data.involvedTeacherIds.size() <= 100
+        && (!('involvedTeacherDimensions' in data) || data.involvedTeacherDimensions is map)
+        && data.studentIds is list && data.studentIds.size() <= 600
+        && data.status in ['Aktif', 'Nonaktif']
+        && (!('isAssessmentLocked' in data) || data.isAssessmentLocked is bool)
+        && isStrBounded(data.createdAt, 4, 64)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    function isValidKokActivity(data) {
+      return data.keys().hasAll([
+          'id', 'orderIndex', 'name', 'finalObjective', 'groupId', 'theme',
+          'phase', 'academicYear', 'semester', 'dimensionIds', 'subdimensionIds',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'schoolId', 'orderIndex', 'name', 'finalObjective', 'groupId', 'theme',
+          'phase', 'academicYear', 'semester', 'dimensionIds', 'subdimensionIds',
+          'isLocked', 'createdAt', 'updatedAt'
+        ])
+        && isValidKokId(data.id)
+        && (!('schoolId' in data) || isStrBounded(data.schoolId, 0, 100))
+        && data.orderIndex is number && data.orderIndex >= 1 && data.orderIndex <= 500
+        && isStrBounded(data.name, 2, 250)
+        && isStrBounded(data.finalObjective, 2, 2000)
+        && isValidKokId(data.groupId)
+        && isStrBounded(data.theme, 2, 200)
+        && isStrBounded(data.phase, 1, 80)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && data.dimensionIds is list && data.dimensionIds.size() >= 1 && data.dimensionIds.size() <= 8
+        && data.subdimensionIds is list && data.subdimensionIds.size() >= 1 && data.subdimensionIds.size() <= 30
+        && (!('isLocked' in data) || data.isLocked is bool)
+        && isStrBounded(data.createdAt, 4, 64)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    function isValidKokScore(data) {
+      return data.keys().hasAll([
+          'id', 'academicYear', 'semester', 'groupId', 'activityId',
+          'studentId', 'rombelId', 'dimensionId', 'subdimensionId',
+          'teacherId', 'level', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'schoolId', 'academicYear', 'semester', 'groupId', 'activityId',
+          'studentId', 'rombelId', 'dimensionId', 'subdimensionId',
+          'teacherId', 'level', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidKokId(data.id)
+        && (!('schoolId' in data) || isStrBounded(data.schoolId, 0, 100))
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isValidKokId(data.groupId)
+        && isValidKokId(data.activityId)
+        && isStrBounded(data.studentId, 1, 128)
+        && isStrBounded(data.rombelId, 0, 128)
+        && isStrBounded(data.dimensionId, 1, 64)
+        && isStrBounded(data.subdimensionId, 1, 64)
+        && isStrBounded(data.teacherId, 1, 128)
+        && isValidKokLevel(data.level)
+        && data.status in ['Draft', 'Tersimpan', 'Terkunci']
+        && isStrBounded(data.createdAt, 4, 64)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    function isValidKokDescription(data) {
+      return data.keys().hasAll([
+          'id', 'academicYear', 'semester', 'groupId', 'activityId',
+          'studentId', 'rombelId', 'teacherId', 'description',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'schoolId', 'academicYear', 'semester', 'groupId', 'activityId',
+          'studentId', 'rombelId', 'teacherId', 'description',
+          'status', 'completenessWarning', 'isAutoGenerated',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidKokId(data.id)
+        && (!('schoolId' in data) || isStrBounded(data.schoolId, 0, 100))
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isValidKokId(data.groupId)
+        && isValidKokId(data.activityId)
+        && isStrBounded(data.studentId, 1, 128)
+        && isStrBounded(data.rombelId, 0, 128)
+        && isStrBounded(data.teacherId, 1, 128)
+        && isStrBounded(data.description, 0, 4000)
+        && data.status in ['Belum diisi', 'Draft', 'Sudah disimpan', 'Sudah diperiksa', 'Final']
+        && (!('completenessWarning' in data) || isStrBounded(data.completenessWarning, 0, 1000))
+        && (!('isAutoGenerated' in data) || data.isAutoGenerated is bool)
+        && isStrBounded(data.createdAt, 4, 64)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    // =========================================================================
+    // KOKURIKULER COLLECTIONS (Schema-validated, lock-enforced, qualitative-only)
+    // =========================================================================
+    match /kokurikuler_dimensions/{dimId} {
+      allow read: if true;
+      allow create: if isValidKokId(dimId) && isValidKokDimension(request.resource.data);
+      allow update: if isValidKokId(dimId)
+        && isValidKokDimension(request.resource.data)
+        && (
+          resource.data.get('isLocked', false) != true
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isLocked', 'updatedAt'])
+        );
+      allow delete: if false;
+    }
+
+    match /kokurikuler_themes/{themeId} {
+      allow read: if true;
+      allow create, update: if isValidKokId(themeId) && isValidKokTheme(request.resource.data);
+      allow delete: if isValidKokId(themeId);
+    }
+
+    match /kokurikuler_groups/{groupId} {
+      allow read: if true;
+      allow create, update: if isValidKokId(groupId) && isValidKokGroup(request.resource.data);
+      allow delete: if isValidKokId(groupId);
+    }
+
+    match /kokurikuler_activities/{activityId} {
+      allow read: if true;
+      allow create, update: if isValidKokId(activityId) && isValidKokActivity(request.resource.data);
+      allow delete: if isValidKokId(activityId);
+    }
+
+    match /kokurikuler_scores/{scoreId} {
+      allow read: if true;
+      allow create, update: if isValidKokId(scoreId)
+        && isValidKokScore(request.resource.data)
+        && isGroupAssessmentUnlocked(request.resource.data.groupId);
+      allow delete: if isValidKokId(scoreId)
+        && isGroupAssessmentUnlocked(resource.data.groupId);
+    }
+
+    match /kokurikuler_descriptions/{descId} {
+      allow read: if true;
+      allow create, update: if isValidKokId(descId)
+        && isValidKokDescription(request.resource.data)
+        && isGroupAssessmentUnlocked(request.resource.data.groupId);
+      allow delete: if isValidKokId(descId)
+        && isGroupAssessmentUnlocked(resource.data.groupId);
+    }
+
+    // =========================================================================
+    // EXISTING SCHOOL COLLECTIONS (Preserved for full multi-device & Vercel compatibility)
+    // =========================================================================
     match /audit_logs/{logId} {
       allow read, create: if true;
       allow update, delete: if false;
     }
 
-    // All school data, users, teachers, students, classrooms, subjects, assignments, and grades
-    // Allow read & write to enable seamless real-time synchronization across all devices (PC, Laptop, HP, Vercel)
-    match /{document=**} {
-      allow read, write: if true;
-    }
+    match /schools/{docId} { allow read, write: if true; }
+    match /users/{docId} { allow read, write: if true; }
+    match /teachers/{docId} { allow read, write: if true; }
+    match /students/{docId} { allow read, write: if true; }
+    match /classrooms/{docId} { allow read, write: if true; }
+    match /subjects/{docId} { allow read, write: if true; }
+    match /curricula/{docId} { allow read, write: if true; }
+    match /assessments/{docId} { allow read, write: if true; }
+    match /teaching_assignments/{docId} { allow read, write: if true; }
+    match /assessment_scores/{docId} { allow read, write: if true; }
+    match /formative_assessments/{docId} { allow read, write: if true; }
+    match /summative_assessments/{docId} { allow read, write: if true; }
+    match /kktp_configs/{docId} { allow read, write: if true; }
+    match /final_score_configs/{docId} { allow read, write: if true; }
+    match /attendance/{docId} { allow read, write: if true; }
+    match /homeroom_notes/{docId} { allow read, write: if true; }
+    match /extracurriculars/{docId} { allow read, write: if true; }
+    match /student_extracurriculars/{docId} { allow read, write: if true; }
+    match /academic_years/{docId} { allow read, write: if true; }
+    match /student_mutations/{docId} { allow read, write: if true; }
+    match /student_achievements/{docId} { allow read, write: if true; }
+    match /kokurikuler_projects/{docId} { allow read, write: if true; }
+    match /notifications/{docId} { allow read, write: if true; }
+    match /application_settings/{docId} { allow read, write: if true; }
   }
 }

@@ -37,7 +37,13 @@ import {
   AcademicYearPeriod,
   StudentMutation,
   StudentAchievement,
-  KokurikulerProject
+  KokurikulerProject,
+  KokurikulerDimensionMaster,
+  KokurikulerThemeMaster,
+  KokurikulerGroup,
+  KokurikulerActivity,
+  KokurikulerScore,
+  KokurikulerDescription
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 
@@ -600,6 +606,40 @@ export async function syncAllToFirestore(
         reportOps.push({ ref: doc(db, 'kokurikuler_projects', sanitizeDocId(kp.id)), data: kp });
       });
     }
+    if (dbData.kokurikulerDimensions) {
+      dbData.kokurikulerDimensions.forEach((kd) => {
+        reportOps.push({ ref: doc(db, 'kokurikuler_dimensions', sanitizeDocId(kd.id)), data: kd });
+      });
+    }
+    if (dbData.kokurikulerThemes) {
+      dbData.kokurikulerThemes.forEach((kt) => {
+        reportOps.push({ ref: doc(db, 'kokurikuler_themes', sanitizeDocId(kt.id)), data: kt });
+      });
+    }
+    if (dbData.kokurikulerGroups) {
+      dbData.kokurikulerGroups.forEach((kg) => {
+        if (!isEntityDeleted('kokurikulerGroups', kg.id)) {
+          reportOps.push({ ref: doc(db, 'kokurikuler_groups', sanitizeDocId(kg.id)), data: kg });
+        }
+      });
+    }
+    if (dbData.kokurikulerActivities) {
+      dbData.kokurikulerActivities.forEach((ka) => {
+        if (!isEntityDeleted('kokurikulerActivities', ka.id)) {
+          reportOps.push({ ref: doc(db, 'kokurikuler_activities', sanitizeDocId(ka.id)), data: ka });
+        }
+      });
+    }
+    if (dbData.kokurikulerScores) {
+      dbData.kokurikulerScores.forEach((ks) => {
+        reportOps.push({ ref: doc(db, 'kokurikuler_scores', sanitizeDocId(ks.id)), data: ks });
+      });
+    }
+    if (dbData.kokurikulerDescriptions) {
+      dbData.kokurikulerDescriptions.forEach((kd) => {
+        reportOps.push({ ref: doc(db, 'kokurikuler_descriptions', sanitizeDocId(kd.id)), data: kd });
+      });
+    }
 
     await commitInBatches(reportOps, 'Mengunggah data rapor & administrasi akademik');
 
@@ -724,7 +764,13 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       formativeSnap,
       summativeSnap,
       kktpSnap,
-      finalConfigSnap
+      finalConfigSnap,
+      kokurikulerDimensionsSnap,
+      kokurikulerThemesSnap,
+      kokurikulerGroupsSnap,
+      kokurikulerActivitiesSnap,
+      kokurikulerScoresSnap,
+      kokurikulerDescriptionsSnap
     ] = await Promise.all([
       getDoc(doc(db, 'schools', 'smpn1rangsang')),
       getDoc(doc(db, 'application_settings', 'tombstones')).catch(() => null),
@@ -744,7 +790,13 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'formative_assessments')),
       getDocs(collection(db, 'summative_assessments')),
       getDocs(collection(db, 'kktp_configs')),
-      getDocs(collection(db, 'final_score_configs'))
+      getDocs(collection(db, 'final_score_configs')),
+      getDocs(collection(db, 'kokurikuler_dimensions')).catch(() => null),
+      getDocs(collection(db, 'kokurikuler_themes')).catch(() => null),
+      getDocs(collection(db, 'kokurikuler_groups')).catch(() => null),
+      getDocs(collection(db, 'kokurikuler_activities')).catch(() => null),
+      getDocs(collection(db, 'kokurikuler_scores')).catch(() => null),
+      getDocs(collection(db, 'kokurikuler_descriptions')).catch(() => null)
     ]);
 
     if (tombstonesDoc && (tombstonesDoc as any).exists && (tombstonesDoc as any).exists()) {
@@ -757,7 +809,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       !teachersSnap.empty || 
       !scoresSnap.empty ||
       !formativeSnap.empty ||
-      !summativeSnap.empty;
+      !summativeSnap.empty ||
+      (kokurikulerGroupsSnap && !kokurikulerGroupsSnap.empty);
 
     if (!hasAnyCloudData) {
       updateSyncState({
@@ -792,7 +845,25 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment),
       summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
       kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
-      finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig)
+      finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig),
+      ...(kokurikulerDimensionsSnap && !kokurikulerDimensionsSnap.empty
+        ? { kokurikulerDimensions: kokurikulerDimensionsSnap.docs.map((d) => d.data() as KokurikulerDimensionMaster) }
+        : {}),
+      ...(kokurikulerThemesSnap && !kokurikulerThemesSnap.empty
+        ? { kokurikulerThemes: kokurikulerThemesSnap.docs.map((d) => d.data() as KokurikulerThemeMaster) }
+        : {}),
+      ...(kokurikulerGroupsSnap
+        ? { kokurikulerGroups: kokurikulerGroupsSnap.docs.map((d) => d.data() as KokurikulerGroup) }
+        : {}),
+      ...(kokurikulerActivitiesSnap
+        ? { kokurikulerActivities: kokurikulerActivitiesSnap.docs.map((d) => d.data() as KokurikulerActivity) }
+        : {}),
+      ...(kokurikulerScoresSnap
+        ? { kokurikulerScores: kokurikulerScoresSnap.docs.map((d) => d.data() as KokurikulerScore) }
+        : {}),
+      ...(kokurikulerDescriptionsSnap
+        ? { kokurikulerDescriptions: kokurikulerDescriptionsSnap.docs.map((d) => d.data() as KokurikulerDescription) }
+        : {})
     };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
@@ -873,6 +944,12 @@ export interface FirestoreRealtimePayload {
   studentMutations?: StudentMutation[];
   studentAchievements?: StudentAchievement[];
   kokurikulerProjects?: KokurikulerProject[];
+  kokurikulerDimensions?: KokurikulerDimensionMaster[];
+  kokurikulerThemes?: KokurikulerThemeMaster[];
+  kokurikulerGroups?: KokurikulerGroup[];
+  kokurikulerActivities?: KokurikulerActivity[];
+  kokurikulerScores?: KokurikulerScore[];
+  kokurikulerDescriptions?: KokurikulerDescription[];
   removedDocIds?: Record<string, string[]>;
 }
 
@@ -948,6 +1025,12 @@ export function listenToFirestoreRealtime(
     genericListener('student_mutations', 'studentMutations'),
     genericListener('student_achievements', 'studentAchievements'),
     genericListener('kokurikuler_projects', 'kokurikulerProjects'),
+    genericListener('kokurikuler_dimensions', 'kokurikulerDimensions'),
+    genericListener('kokurikuler_themes', 'kokurikulerThemes'),
+    genericListener('kokurikuler_groups', 'kokurikulerGroups'),
+    genericListener('kokurikuler_activities', 'kokurikulerActivities'),
+    genericListener('kokurikuler_scores', 'kokurikulerScores'),
+    genericListener('kokurikuler_descriptions', 'kokurikulerDescriptions'),
     onSnapshot(doc(db, 'application_settings', 'tombstones'), (snap) => {
       if (snap.exists()) {
         updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
@@ -1061,4 +1144,130 @@ export async function deleteDocFromFirestore(collectionName: string, docId: stri
     }
   }
 }
+
+/**
+ * Direct verified batch save for Kokurikuler Scores to Cloud Firestore.
+ * Returns exact success/error status so callers never falsely report saved when Firebase fails.
+ */
+export async function saveKokurikulerScoresDirect(
+  scores: KokurikulerScore[]
+): Promise<{ success: boolean; count: number; error?: string; quotaExceeded?: boolean }> {
+  if (isCloudQuotaExhausted) {
+    return {
+      success: false,
+      count: 0,
+      quotaExceeded: true,
+      error: 'Kuota harian Cloud Firebase tercapai. Data hanya tersimpan di penyimpanan lokal peramban.'
+    };
+  }
+  if (scores.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  try {
+    await ensureFirebaseAuth();
+    const BATCH_SIZE = 350;
+    let totalSaved = 0;
+
+    for (let i = 0; i < scores.length; i += BATCH_SIZE) {
+      const chunk = scores.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((sc) => {
+        batch.set(
+          doc(db, 'kokurikuler_scores', sanitizeDocId(sc.id)),
+          cleanForFirestore(sc),
+          { merge: true }
+        );
+      });
+      await withTimeout(batch.commit(), 20000);
+      totalSaved += chunk.length;
+    }
+
+    const nowTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    updateSyncState({
+      status: 'synced',
+      lastSyncTime: nowTime,
+      message: `${totalSaved} capaian kokurikuler berhasil disimpan ke Firebase (${nowTime})`
+    });
+
+    return { success: true, count: totalSaved };
+  } catch (err: any) {
+    if (isQuotaExceededError(err)) {
+      await markQuotaExceeded(err?.message);
+      return {
+        success: false,
+        count: 0,
+        quotaExceeded: true,
+        error: 'Kuota harian Firebase tercapai. Penyimpanan ke Cloud gagal.'
+      };
+    }
+    const errMsg = err?.message || String(err);
+    updateSyncState({
+      status: 'error',
+      message: `Gagal menyimpan capaian kokurikuler ke Firebase: ${errMsg}`
+    });
+    return { success: false, count: 0, error: errMsg };
+  }
+}
+
+/**
+ * Direct verified batch save for Kokurikuler Descriptions to Cloud Firestore.
+ */
+export async function saveKokurikulerDescriptionsDirect(
+  descriptions: KokurikulerDescription[]
+): Promise<{ success: boolean; count: number; error?: string; quotaExceeded?: boolean }> {
+  if (isCloudQuotaExhausted) {
+    return {
+      success: false,
+      count: 0,
+      quotaExceeded: true,
+      error: 'Kuota harian Cloud Firebase tercapai. Penyimpanan ke Cloud gagal.'
+    };
+  }
+  if (descriptions.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  try {
+    await ensureFirebaseAuth();
+    const BATCH_SIZE = 350;
+    let totalSaved = 0;
+
+    for (let i = 0; i < descriptions.length; i += BATCH_SIZE) {
+      const chunk = descriptions.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((desc) => {
+        batch.set(
+          doc(db, 'kokurikuler_descriptions', sanitizeDocId(desc.id)),
+          cleanForFirestore(desc),
+          { merge: true }
+        );
+      });
+      await withTimeout(batch.commit(), 20000);
+      totalSaved += chunk.length;
+    }
+
+    const nowTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    updateSyncState({
+      status: 'synced',
+      lastSyncTime: nowTime,
+      message: `${totalSaved} deskripsi kokurikuler berhasil disimpan ke Firebase (${nowTime})`
+    });
+
+    return { success: true, count: totalSaved };
+  } catch (err: any) {
+    if (isQuotaExceededError(err)) {
+      await markQuotaExceeded(err?.message);
+      return {
+        success: false,
+        count: 0,
+        quotaExceeded: true,
+        error: 'Kuota harian Firebase tercapai. Penyimpanan ke Cloud gagal.'
+      };
+    }
+    const errMsg = err?.message || String(err);
+    return { success: false, count: 0, error: errMsg };
+  }
+}
+
 

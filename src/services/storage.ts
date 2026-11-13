@@ -22,7 +22,13 @@ import {
   AcademicYearPeriod,
   StudentMutation,
   StudentAchievement,
-  KokurikulerProject
+  KokurikulerProject,
+  KokurikulerDimensionMaster,
+  KokurikulerThemeMaster,
+  KokurikulerGroup,
+  KokurikulerActivity,
+  KokurikulerScore,
+  KokurikulerDescription
 } from '../types/erapor';
 import {
   initialSchoolProfile,
@@ -52,6 +58,10 @@ import {
 import { syncProfileAcademicYear } from '../utils/academicYear';
 import { sortClassrooms } from '../utils/classroomSort';
 import { SubjectDescriptionBank, defaultDescriptionBank } from '../utils/descriptionBank';
+import {
+  OFFICIAL_KOKURIKULER_DIMENSIONS,
+  OFFICIAL_KOKURIKULER_THEMES
+} from '../data/kokurikulerMaster';
 
 const STORAGE_KEY = 'erapor_smpn1rangsang_db_v3';
 
@@ -83,6 +93,13 @@ export interface AppDatabase {
   studentMutations: StudentMutation[];
   studentAchievements: StudentAchievement[];
   kokurikulerProjects: KokurikulerProject[];
+  // Modul Penilaian Kokurikuler (e-Rapor SMP 2025.2 / BSKAP 058/H/KR/2025)
+  kokurikulerDimensions: KokurikulerDimensionMaster[];
+  kokurikulerThemes: KokurikulerThemeMaster[];
+  kokurikulerGroups: KokurikulerGroup[];
+  kokurikulerActivities: KokurikulerActivity[];
+  kokurikulerScores: KokurikulerScore[];
+  kokurikulerDescriptions: KokurikulerDescription[];
 }
 
 
@@ -147,11 +164,25 @@ export const loadDatabase = (): AppDatabase => {
         academicYears: initialAcademicYears,
         studentMutations: initialStudentMutations,
         studentAchievements: initialStudentAchievements,
-        kokurikulerProjects: initialKokurikulerProjects
+        kokurikulerProjects: initialKokurikulerProjects,
+        kokurikulerDimensions: OFFICIAL_KOKURIKULER_DIMENSIONS,
+        kokurikulerThemes: OFFICIAL_KOKURIKULER_THEMES,
+        kokurikulerGroups: [],
+        kokurikulerActivities: [],
+        kokurikulerScores: [],
+        kokurikulerDescriptions: []
       };
       saveDatabase(initialDb);
       return initialDb;
     }
+
+    // Automatic pre-migration backup snapshot before extending database with Kokurikuler module
+    try {
+      if (!localStorage.getItem('erapor_backup_pre_kokurikuler_v1')) {
+        localStorage.setItem('erapor_backup_pre_kokurikuler_v1', raw);
+      }
+    } catch {}
+
     const parsed = JSON.parse(raw);
     
     // Automatically advance academic year if autoAcademicYear is true
@@ -248,7 +279,17 @@ export const loadDatabase = (): AppDatabase => {
         academicYears: parsed.academicYears?.length ? parsed.academicYears : initialAcademicYears,
         studentMutations: parsed.studentMutations?.length ? parsed.studentMutations : initialStudentMutations,
         studentAchievements: parsed.studentAchievements?.length ? parsed.studentAchievements : initialStudentAchievements,
-        kokurikulerProjects: parsed.kokurikulerProjects?.length ? parsed.kokurikulerProjects : initialKokurikulerProjects
+        kokurikulerProjects: parsed.kokurikulerProjects?.length ? parsed.kokurikulerProjects : initialKokurikulerProjects,
+        kokurikulerDimensions: parsed.kokurikulerDimensions?.length
+          ? parsed.kokurikulerDimensions
+          : OFFICIAL_KOKURIKULER_DIMENSIONS,
+        kokurikulerThemes: parsed.kokurikulerThemes?.length
+          ? parsed.kokurikulerThemes
+          : OFFICIAL_KOKURIKULER_THEMES,
+        kokurikulerGroups: Array.isArray(parsed.kokurikulerGroups) ? parsed.kokurikulerGroups : [],
+        kokurikulerActivities: Array.isArray(parsed.kokurikulerActivities) ? parsed.kokurikulerActivities : [],
+        kokurikulerScores: Array.isArray(parsed.kokurikulerScores) ? parsed.kokurikulerScores : [],
+        kokurikulerDescriptions: Array.isArray(parsed.kokurikulerDescriptions) ? parsed.kokurikulerDescriptions : []
       })
     );
 
@@ -281,7 +322,13 @@ export const loadDatabase = (): AppDatabase => {
       academicYears: initialAcademicYears,
       studentMutations: initialStudentMutations,
       studentAchievements: initialStudentAchievements,
-      kokurikulerProjects: initialKokurikulerProjects
+      kokurikulerProjects: initialKokurikulerProjects,
+      kokurikulerDimensions: OFFICIAL_KOKURIKULER_DIMENSIONS,
+      kokurikulerThemes: OFFICIAL_KOKURIKULER_THEMES,
+      kokurikulerGroups: [],
+      kokurikulerActivities: [],
+      kokurikulerScores: [],
+      kokurikulerDescriptions: []
     };
   }
 };

@@ -10,10 +10,16 @@ import {
   StudentExtracurricular,
   Extracurricular,
   HomeroomNote,
-  Teacher
+  Teacher,
+  KokurikulerGroup,
+  KokurikulerActivity,
+  KokurikulerDescription,
+  KokurikulerScore,
+  KokurikulerDimensionMaster
 } from '../types/erapor';
 import { getTutWuriHandayaniDataUrl } from '../components/common/TutWuriHandayaniLogo';
 import { sortSubjects } from '../utils/subjectSort';
+import { getSubdimensionMap } from '../utils/kokurikulerHelper';
 
 export interface ReportCardExportOptions {
   school: SchoolProfile;
@@ -28,6 +34,10 @@ export interface ReportCardExportOptions {
   homeroomNote: HomeroomNote | undefined;
   academicYear: string;
   semester: string;
+  kokurikulerGroups?: KokurikulerGroup[];
+  kokurikulerActivities?: KokurikulerActivity[];
+  kokurikulerDescriptions?: KokurikulerDescription[];
+  kokurikulerScores?: KokurikulerScore[];
 }
 
 export interface BatchClassReportOptions {
@@ -44,6 +54,10 @@ export interface BatchClassReportOptions {
   academicYear: string;
   semester: string;
   mode?: 'complete' | 'gradesOnly';
+  kokurikulerGroups?: KokurikulerGroup[];
+  kokurikulerActivities?: KokurikulerActivity[];
+  kokurikulerDescriptions?: KokurikulerDescription[];
+  kokurikulerScores?: KokurikulerScore[];
 }
 
 /**
@@ -310,7 +324,11 @@ export const buildReportContentPages = (
     studentExtracurriculars,
     homeroomNote,
     academicYear,
-    semester
+    semester,
+    kokurikulerGroups = [],
+    kokurikulerActivities = [],
+    kokurikulerDescriptions = [],
+    kokurikulerScores = []
   } = options;
 
   const sortedSubjects = sortSubjects(subjects);
@@ -324,10 +342,6 @@ export const buildReportContentPages = (
   doc.text(`KURIKULUM MERDEKA - TAHUN PELAJARAN ${academicYear}`, pageWidth / 2, 21, { align: 'center' });
 
   // Student Identity Grid with perfectly aligned colons using autoTable
-  const parentNameDisplay = student.fatherName
-    ? (student.motherName ? `${student.fatherName} / ${student.motherName}` : student.fatherName)
-    : (student.motherName || '-');
-
   const identityRows = [
     ['Nama Peserta Didik', ':', student.name, 'Kelas', ':', classroom.name],
     ['NIS / NISN', ':', `${student.nis || '-'} / ${student.nisn || '-'}`, 'Fase', ':', 'Fase D'],
@@ -412,14 +426,104 @@ export const buildReportContentPages = (
     margin: { left: 14, right: 14 }
   });
 
-  // EXACT PAGE BREAK: Page 1 ends after Section A Grades table. Page 2 starts with Section B.
+  // EXACT PAGE BREAK: Page 1 ends after Section A Grades table. Page 2 starts with Section B Kokurikuler.
   doc.addPage();
-  let finalY = 20;
+  let finalY = 18;
 
-  // B. Extracurriculars
+  // B. Kegiatan Kokurikuler (Capaian Profil Lulusan)
+  const studentGroups = kokurikulerGroups.filter(
+    (g) =>
+      g.academicYear === academicYear &&
+      g.semester === semester &&
+      Array.isArray(g.studentIds) &&
+      g.studentIds.includes(student.id)
+  );
+  const studentGroupIds = new Set(studentGroups.map((g) => g.id));
+  const studentActivities = kokurikulerActivities
+    .filter(
+      (a) =>
+        a.academicYear === academicYear &&
+        a.semester === semester &&
+        studentGroupIds.has(a.groupId)
+    )
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
+  const studentDescMap = new Map(
+    kokurikulerDescriptions
+      .filter(
+        (d) =>
+          d.studentId === student.id &&
+          d.academicYear === academicYear &&
+          d.semester === semester
+      )
+      .map((d) => [`${d.groupId}_${d.activityId}`, d])
+  );
+
+  const studentKokScores = kokurikulerScores.filter(
+    (sc) =>
+      sc.studentId === student.id &&
+      sc.academicYear === academicYear &&
+      sc.semester === semester
+  );
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
-  doc.text('B. Kegiatan Ekstrakurikuler', 14, finalY);
+  doc.text('B. Kegiatan Kokurikuler (Capaian Profil Lulusan)', 14, finalY);
+  finalY += 3;
+
+  const kokurikulerRows = studentActivities.map((act, idx) => {
+    const grp = studentGroups.find((g) => g.id === act.groupId);
+    const savedDesc = studentDescMap.get(`${act.groupId}_${act.id}`);
+    const actScores = studentKokScores.filter(
+      (sc) => sc.activityId === act.id && sc.groupId === act.groupId
+    );
+
+    let descText = savedDesc?.description?.trim() || '';
+    if (!descText) {
+      if (actScores.length > 0) {
+        const levelsText = Array.from(new Set(actScores.map((s) => s.level))).join(', ');
+        descText = `Peserta didik telah mengikuti kegiatan ${act.name} dengan capaian kompetensi pada tingkatan ${levelsText}. (Deskripsi akhir belum difinalisasi).`;
+      } else {
+        descText = 'Capaian kegiatan kokurikuler untuk periode ini belum diinput oleh koordinator/guru terkait.';
+      }
+    }
+
+    return [
+      idx + 1,
+      `${act.name}\nTema: ${act.theme}${grp ? ` (${grp.name})` : ''}`,
+      descText
+    ];
+  });
+
+  if (kokurikulerRows.length === 0) {
+    kokurikulerRows.push([
+      '-',
+      'Belum ada kegiatan kokurikuler terdaftar',
+      `Siswa belum terdaftar pada kelompok kegiatan kokurikuler untuk Tahun Pelajaran ${academicYear} Semester ${semester}.`
+    ] as any);
+  }
+
+  autoTable(doc, {
+    startY: finalY,
+    head: [['No', 'Kegiatan Kokurikuler & Tema', 'Capaian & Deskripsi Profil Lulusan']],
+    body: kokurikulerRows,
+    theme: 'plain',
+    styles: { fontSize: 7.5, cellPadding: 2, lineColor: [100, 100, 100], lineWidth: 0.1, textColor: [20, 20, 20] },
+    headStyles: { fillColor: [240, 244, 248], fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { cellWidth: 56, fontStyle: 'bold' },
+      2: { cellWidth: 116 }
+    },
+    margin: { left: 14, right: 14 }
+  });
+
+  finalY = (doc as any).lastAutoTable.finalY + 5;
+
+  // C. Extracurriculars
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('C. Kegiatan Ekstrakurikuler', 14, finalY);
   finalY += 3;
 
   const ekskulMap = new Map(extracurriculars.map((e) => [e.id, e.name]));
@@ -452,10 +556,10 @@ export const buildReportContentPages = (
 
   finalY = (doc as any).lastAutoTable.finalY + 5;
 
-  // C. Attendance Box
+  // D. Attendance Box
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
-  doc.text('C. Ketidakhadiran', 14, finalY);
+  doc.text('D. Ketidakhadiran', 14, finalY);
   finalY += 3;
 
   autoTable(doc, {
@@ -476,10 +580,10 @@ export const buildReportContentPages = (
 
   finalY = (doc as any).lastAutoTable.finalY + 5;
 
-  // D. Homeroom Note
+  // E. Homeroom Note
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
-  doc.text('D. Catatan Wali Kelas', 14, finalY);
+  doc.text('E. Catatan Wali Kelas', 14, finalY);
   finalY += 3;
 
   const noteText = homeroomNote?.growthNote
@@ -496,11 +600,11 @@ export const buildReportContentPages = (
 
   finalY = (doc as any).lastAutoTable.finalY + 5;
 
-  // E. Promotion decision (if Genap semester)
+  // F. Promotion decision (if Genap semester)
   if (semester === 'Genap') {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
-    doc.text('E. Keputusan Kenaikan Kelas / Kelulusan', 14, finalY);
+    doc.text('F. Keputusan Kenaikan Kelas / Kelulusan', 14, finalY);
     finalY += 3;
 
     const defaultDecision =
@@ -643,7 +747,11 @@ export const generateClassBatchReportPDF = async (
     homeroomNotes,
     academicYear,
     semester,
-    mode = 'complete'
+    mode = 'complete',
+    kokurikulerGroups = [],
+    kokurikulerActivities = [],
+    kokurikulerDescriptions = [],
+    kokurikulerScores = []
   } = options;
 
   if (!students || students.length === 0) return;
@@ -703,7 +811,11 @@ export const generateClassBatchReportPDF = async (
       studentExtracurriculars: studentEkskuls,
       homeroomNote: studentNote,
       academicYear,
-      semester
+      semester,
+      kokurikulerGroups,
+      kokurikulerActivities,
+      kokurikulerDescriptions,
+      kokurikulerScores
     };
 
     if (i > 0) {
@@ -864,3 +976,197 @@ export const generateLegerPDF = (
 
   doc.save(`Leger_${classroom.name.replace(/\s+/g, '_')}_${academicYear.replace('/', '-')}.pdf`);
 };
+
+export interface KokurikulerReportPDFOptions {
+  school: SchoolProfile;
+  academicYear: string;
+  semester: string;
+  title: string;
+  groups: KokurikulerGroup[];
+  activities: KokurikulerActivity[];
+  scores: KokurikulerScore[];
+  descriptions: KokurikulerDescription[];
+  students: Student[];
+  classrooms: Classroom[];
+  dimensions: KokurikulerDimensionMaster[];
+}
+
+export const generateKokurikulerReportPDF = (opts: KokurikulerReportPDFOptions) => {
+  const {
+    school,
+    academicYear,
+    semester,
+    title,
+    groups,
+    activities,
+    scores,
+    descriptions,
+    students,
+    classrooms,
+    dimensions
+  } = opts;
+
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const classMap = new Map(classrooms.map((c) => [c.id, c.name]));
+  const studentMap = new Map(students.map((s) => [s.id, s]));
+  const subMap = getSubdimensionMap(dimensions);
+
+  // Header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text(title.toUpperCase(), pageWidth / 2, 13, { align: 'center' });
+  doc.setFontSize(10);
+  doc.text(`${school.name.toUpperCase()} (${school.npsn})`, pageWidth / 2, 18.5, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(
+    `Tahun Pelajaran: ${academicYear} | Semester: ${semester} | Acuan: BSKAP No. 058/H/KR/2025 & e-Rapor SMP 2025.2`,
+    pageWidth / 2,
+    23.5,
+    { align: 'center' }
+  );
+
+  // Table 1: Ringkasan Kelompok & Rekap Distribusi Capaian
+  const summaryRows: any[] = [];
+  activities.forEach((act, idx) => {
+    const grp = groups.find((g) => g.id === act.groupId);
+    if (!grp) return;
+    const actScores = scores.filter(
+      (sc) => sc.activityId === act.id && sc.groupId === grp.id && sc.academicYear === academicYear && sc.semester === semester
+    );
+    const bCount = actScores.filter((s) => s.level === 'Berkembang').length;
+    const cCount = actScores.filter((s) => s.level === 'Cakap').length;
+    const mCount = actScores.filter((s) => s.level === 'Mahir').length;
+    const targetSubCodes = (act.subdimensionIds || [])
+      .map((sid) => subMap.get(sid)?.sub.code || sid)
+      .join(', ');
+
+    summaryRows.push([
+      idx + 1,
+      `${grp.code} - ${grp.name}`,
+      act.name,
+      act.theme,
+      grp.studentIds.length,
+      targetSubCodes || '-',
+      bCount,
+      cCount,
+      mCount
+    ]);
+  });
+
+  autoTable(doc, {
+    startY: 28,
+    head: [['No', 'Kelompok', 'Kegiatan Kokurikuler', 'Tema', 'Peserta', 'Subdimensi Target', 'B', 'C', 'M']],
+    body: summaryRows.length ? summaryRows : [['-', 'Belum ada kegiatan kokurikuler pada filter terpilih', '-', '-', 0, '-', 0, 0, 0]],
+    theme: 'plain',
+    styles: { fontSize: 7.5, cellPadding: 1.8, lineColor: [130, 130, 130], lineWidth: 0.1 },
+    headStyles: { fillColor: [232, 240, 252], fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      4: { halign: 'center', cellWidth: 16 },
+      6: { halign: 'center', cellWidth: 12 },
+      7: { halign: 'center', cellWidth: 12 },
+      8: { halign: 'center', cellWidth: 12 }
+    },
+    margin: { left: 10, right: 10 }
+  });
+
+  // Table 2: Daftar Capaian & Deskripsi per Peserta Didik
+  const participantRows: any[] = [];
+  let rowNo = 1;
+  activities.forEach((act) => {
+    const grp = groups.find((g) => g.id === act.groupId);
+    if (!grp) return;
+    (grp.studentIds || []).forEach((sid) => {
+      const std = studentMap.get(sid);
+      if (!std) return;
+      const actScores = scores.filter(
+        (sc) =>
+          sc.studentId === sid &&
+          sc.activityId === act.id &&
+          sc.groupId === grp.id &&
+          sc.academicYear === academicYear &&
+          sc.semester === semester
+      );
+      const desc = descriptions.find(
+        (d) =>
+          d.studentId === sid &&
+          d.activityId === act.id &&
+          d.groupId === grp.id &&
+          d.academicYear === academicYear &&
+          d.semester === semester
+      );
+
+      const levelBreakdown =
+        actScores.length > 0
+          ? actScores
+              .map((sc) => `${subMap.get(sc.subdimensionId)?.sub.code || sc.subdimensionId}: ${sc.level}`)
+              .join('; ')
+          : 'Belum dinilai';
+
+      participantRows.push([
+        rowNo++,
+        std.nisn || std.nis || '-',
+        std.name,
+        classMap.get(std.classId) || '-',
+        `${act.name} (${grp.code})`,
+        levelBreakdown,
+        desc?.status || 'Belum diisi',
+        desc?.description || '-'
+      ]);
+    });
+  });
+
+  let nextY = (doc as any).lastAutoTable.finalY + 6;
+  if (nextY > 165) {
+    doc.addPage();
+    nextY = 15;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('REKAP CAPAIAN SUBDIMENSI & DESKRIPSI RAPOR PESERTA DIDIK', 10, nextY);
+
+  autoTable(doc, {
+    startY: nextY + 3,
+    head: [['No', 'NISN', 'Nama Peserta Didik', 'Rombel', 'Kegiatan / Kelompok', 'Capaian Subdimensi', 'Status', 'Deskripsi Rapor']],
+    body: participantRows.length
+      ? participantRows
+      : [['-', '-', 'Belum ada data peserta pada filter terpilih', '-', '-', '-', '-', '-']],
+    theme: 'plain',
+    styles: { fontSize: 7, cellPadding: 1.6, lineColor: [140, 140, 140], lineWidth: 0.1 },
+    headStyles: { fillColor: [240, 244, 248], fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 20 },
+      2: { cellWidth: 36 },
+      3: { halign: 'center', cellWidth: 18 },
+      4: { cellWidth: 36 },
+      5: { cellWidth: 48 },
+      6: { halign: 'center', cellWidth: 20 },
+      7: { cellWidth: 88 }
+    },
+    margin: { left: 10, right: 10 }
+  });
+
+  const signY = Math.min((doc as any).lastAutoTable.finalY + 10, doc.internal.pageSize.getHeight() - 32);
+  const signX = pageWidth - 75;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`${school.reportPlace}, ${school.reportDate}`, signX, signY);
+  doc.text('Kepala SMP Negeri 1 Rangsang,', signX, signY + 4.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text(school.headmasterName, signX, signY + 20);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`NIP. ${school.headmasterNip}`, signX, signY + 24);
+
+  doc.save(`Laporan_Kokurikuler_${school.name.replace(/\s+/g, '_')}_${academicYear.replace('/', '-')}_${semester}.pdf`);
+};
+

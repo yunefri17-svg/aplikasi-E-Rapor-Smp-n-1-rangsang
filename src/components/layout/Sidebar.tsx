@@ -25,6 +25,9 @@ import {
   Settings,
   Award,
   Calendar,
+  Compass,
+  Layers,
+  Upload,
   X
 } from 'lucide-react';
 import { UserRole } from '../../types/erapor';
@@ -62,6 +65,15 @@ export type MenuId =
   | 'asesmen-sumatif'
   | 'kktp-config'
   | 'pengolahan-nilai-akhir'
+  | 'kokurikuler-kelompok'
+  | 'kokurikuler-kegiatan'
+  | 'kokurikuler-profil'
+  | 'kokurikuler-input'
+  | 'kokurikuler-import'
+  | 'kokurikuler-deskripsi'
+  | 'kokurikuler-rekap-siswa'
+  | 'kokurikuler-rekap-kelompok'
+  | 'kokurikuler-cetak'
   | 'pengaturan-aplikasi';
 
 interface SidebarProps {
@@ -84,6 +96,7 @@ interface MenuItem {
   icon: React.ComponentType<{ className?: string }>;
   badge?: string | number;
   roles: UserRole[]; // Which roles can access this menu
+  subSection?: string;
 }
 
 interface MenuGroup {
@@ -130,6 +143,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'asesmen-formatif', label: '13. Asesmen Formatif', icon: ClipboardList, roles: ['admin', 'guru', 'walikelas'] },
         { id: 'asesmen-sumatif', label: '14. Asesmen Sumatif', icon: Award, roles: ['admin', 'guru', 'walikelas'] },
         { id: 'pengolahan-nilai-akhir', label: '15. Pengolahan Nilai Akhir', icon: Calculator, roles: ['admin', 'guru', 'walikelas'] }
+      ]
+    },
+    {
+      groupTitle: 'KOKURIKULER',
+      items: [
+        { id: 'kokurikuler-kelompok', label: 'Kelompok Kokurikuler', icon: Users, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Data Kokurikuler' },
+        { id: 'kokurikuler-kegiatan', label: 'Kegiatan Kokurikuler', icon: Layers, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Data Kokurikuler' },
+        { id: 'kokurikuler-profil', label: 'Profil Lulusan (8 Dimensi)', icon: Compass, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Data Kokurikuler' },
+        { id: 'kokurikuler-input', label: 'Input Nilai Kokurikuler', icon: ClipboardList, roles: ['admin', 'guru', 'walikelas'], subSection: 'Nilai Kokurikuler' },
+        { id: 'kokurikuler-import', label: 'Import Nilai Kokurikuler', icon: Upload, roles: ['admin', 'guru', 'walikelas'], subSection: 'Nilai Kokurikuler' },
+        { id: 'kokurikuler-deskripsi', label: 'Deskripsi Kokurikuler', icon: FileSignature, roles: ['admin', 'guru', 'walikelas'], subSection: 'Nilai Kokurikuler' },
+        { id: 'kokurikuler-rekap-siswa', label: 'Rekap Capaian Siswa', icon: Table, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Laporan Kokurikuler' },
+        { id: 'kokurikuler-rekap-kelompok', label: 'Rekap Kelompok Kegiatan', icon: BarChart3, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Laporan Kokurikuler' },
+        { id: 'kokurikuler-cetak', label: 'Cetak Laporan Kokurikuler', icon: Printer, roles: ['admin', 'guru', 'walikelas', 'kepsek'], subSection: 'Laporan Kokurikuler' }
       ]
     },
     {
@@ -219,38 +246,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="px-3 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                   {group.groupTitle}
                 </div>
-                {visibleItems.map((item) => {
+                {visibleItems.map((item, idx) => {
                   const Icon = item.icon;
                   const isActive = activeMenu === item.id;
+                  const prevSubSection = idx > 0 ? visibleItems[idx - 1].subSection : undefined;
+                  const showSubHeader = item.subSection && item.subSection !== prevSubSection;
+
                   return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        onSelectMenu(item.id);
-                        if (isOpenMobile) onCloseMobile();
-                      }}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
-                        isActive
-                          ? 'bg-blue-600 text-white font-semibold shadow-xs shadow-blue-500/20 translate-x-0.5'
-                          : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 truncate">
-                        <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                        <span className="truncate">{item.label}</span>
-                      </div>
-                      {item.badge !== undefined && (
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            isActive
-                              ? 'bg-blue-700 text-blue-100'
-                              : 'bg-slate-800 text-slate-400 border border-slate-700'
-                          }`}
-                        >
-                          {item.badge}
-                        </span>
+                    <React.Fragment key={item.id}>
+                      {showSubHeader && (
+                        <div className="px-3 pt-2 pb-0.5 text-[10px] font-semibold text-blue-400/90 tracking-wide">
+                          {item.subSection}
+                        </div>
                       )}
-                    </button>
+                      <button
+                        onClick={() => {
+                          onSelectMenu(item.id);
+                          if (isOpenMobile) onCloseMobile();
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-medium transition-all ${
+                          isActive
+                            ? 'bg-blue-600 text-white font-semibold shadow-xs shadow-blue-500/20 translate-x-0.5'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                          <span className="truncate">{item.label}</span>
+                        </div>
+                        {item.badge !== undefined && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              isActive
+                                ? 'bg-blue-700 text-blue-100'
+                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                            }`}
+                          >
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    </React.Fragment>
                   );
                 })}
               </div>

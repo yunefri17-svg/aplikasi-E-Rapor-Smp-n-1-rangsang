@@ -10,7 +10,11 @@ import {
   StudentExtracurricular,
   HomeroomNote,
   Teacher,
-  User
+  User,
+  KokurikulerGroup,
+  KokurikulerActivity,
+  KokurikulerDescription,
+  KokurikulerScore
 } from '../types/erapor';
 import {
   Printer,
@@ -54,6 +58,10 @@ interface CetakRaporViewProps {
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
+  kokurikulerGroups?: KokurikulerGroup[];
+  kokurikulerActivities?: KokurikulerActivity[];
+  kokurikulerDescriptions?: KokurikulerDescription[];
+  kokurikulerScores?: KokurikulerScore[];
 }
 
 type PreviewPage = 'all' | 'cover' | 'school' | 'biodata' | 'grades';
@@ -72,7 +80,11 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
   preselectedStudentId,
   academicYear,
   semester,
-  currentUser
+  currentUser,
+  kokurikulerGroups = [],
+  kokurikulerActivities = [],
+  kokurikulerDescriptions = [],
+  kokurikulerScores = []
 }) => {
   const [activePreviewPage, setActivePreviewPage] = useState<PreviewPage>('cover');
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
@@ -166,6 +178,40 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
     (currentStudent.fatherName || currentStudent.motherName) &&
     missingSubjects.length === 0;
 
+  // Kokurikuler data for the current student (filtered strictly by period)
+  const studentKokGroups = kokurikulerGroups.filter(
+    (g) =>
+      g.academicYear === academicYear &&
+      g.semester === semester &&
+      Array.isArray(g.studentIds) &&
+      g.studentIds.includes(currentStudent?.id || '')
+  );
+  const studentKokGroupIds = new Set(studentKokGroups.map((g) => g.id));
+  const studentKokActivities = kokurikulerActivities
+    .filter(
+      (a) =>
+        a.academicYear === academicYear &&
+        a.semester === semester &&
+        studentKokGroupIds.has(a.groupId)
+    )
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+  const studentKokDescMap = new Map(
+    kokurikulerDescriptions
+      .filter(
+        (d) =>
+          d.studentId === currentStudent?.id &&
+          d.academicYear === academicYear &&
+          d.semester === semester
+      )
+      .map((d) => [`${d.groupId}_${d.activityId}`, d])
+  );
+  const studentKokScores = kokurikulerScores.filter(
+    (sc) =>
+      sc.studentId === currentStudent?.id &&
+      sc.academicYear === academicYear &&
+      sc.semester === semester
+  );
+
   // Single Student Export Options
   const getSingleExportOptions = (): ReportCardExportOptions | null => {
     if (!currentStudent || !classroom) return null;
@@ -181,7 +227,11 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
       studentExtracurriculars: studentEkskuls,
       homeroomNote: studentNote,
       academicYear,
-      semester
+      semester,
+      kokurikulerGroups,
+      kokurikulerActivities,
+      kokurikulerDescriptions,
+      kokurikulerScores
     };
   };
 
@@ -224,7 +274,11 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
           homeroomNotes,
           academicYear,
           semester,
-          mode: batchMode
+          mode: batchMode,
+          kokurikulerGroups,
+          kokurikulerActivities,
+          kokurikulerDescriptions,
+          kokurikulerScores
         },
         (current, total, name) => {
           setBatchProgress({ current, total, name });
@@ -910,11 +964,70 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                 &mdash; Batas Halaman 1 / Lanjut ke Halaman 2 &mdash;
               </div>
             </div>
+            {/* TABEL CAPAIAN KOKURIKULER (e-Rapor SMP 2025.2 / BSKAP 058/H/KR/2025) */}
+            <div className="space-y-1.5">
+              <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
+                B. Kegiatan Kokurikuler (Capaian Profil Lulusan)
+              </h3>
+              <table className="w-full text-xs text-left border-collapse border border-slate-400">
+                <thead className="bg-slate-100 text-slate-900 font-bold border-b border-slate-400">
+                  <tr>
+                    <th className="px-2 py-1.5 border-r border-slate-400 text-center w-8">No</th>
+                    <th className="px-2 py-1.5 border-r border-slate-400 w-56">Kegiatan Kokurikuler &amp; Tema</th>
+                    <th className="px-2 py-1.5">Capaian &amp; Deskripsi Kompetensi Profil Lulusan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-300">
+                  {studentKokActivities.length > 0 ? (
+                    studentKokActivities.map((act, idx) => {
+                      const grp = studentKokGroups.find((g) => g.id === act.groupId);
+                      const savedDesc = studentKokDescMap.get(`${act.groupId}_${act.id}`);
+                      const actScores = studentKokScores.filter(
+                        (sc) => sc.activityId === act.id && sc.groupId === act.groupId
+                      );
+                      const levelSummary =
+                        actScores.length > 0
+                          ? `Peserta didik telah mengikuti kegiatan ${act.name} dengan capaian kompetensi pada tingkatan ${Array.from(
+                              new Set(actScores.map((s) => s.level))
+                            ).join(', ')}. (Deskripsi akhir belum difinalisasi).`
+                          : 'Capaian kegiatan kokurikuler untuk periode ini belum diinput oleh koordinator/guru terkait.';
+
+                      return (
+                        <tr key={act.id} className="align-top">
+                          <td className="px-2 py-1.5 text-center border-r border-slate-300">{idx + 1}</td>
+                          <td className="px-2 py-1.5 border-r border-slate-300">
+                            <div className="font-bold text-slate-900">{act.name}</div>
+                            <div className="text-[11px] text-slate-600">
+                              Tema: {act.theme}
+                              {grp ? ` (${grp.name})` : ''}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 text-slate-800 text-[11px] leading-relaxed">
+                            {savedDesc?.description?.trim() || levelSummary}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td className="px-2 py-1.5 text-center border-r border-slate-300">-</td>
+                      <td className="px-2 py-1.5 font-semibold border-r border-slate-300 text-slate-600">
+                        Belum ada kegiatan kokurikuler terdaftar
+                      </td>
+                      <td className="px-2 py-1.5 text-slate-500 italic text-[11px]">
+                        Siswa belum terdaftar pada kelompok kegiatan kokurikuler untuk Tahun Pelajaran {academicYear} Semester {semester}.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Ekskul */}
               <div className="space-y-1.5">
                 <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
-                  B. Kegiatan Ekstrakurikuler
+                  C. Kegiatan Ekstrakurikuler
                 </h3>
                 <table className="w-full text-xs text-left border-collapse border border-slate-400">
                   <thead className="bg-slate-100 text-slate-900 font-bold border-b border-slate-400">
@@ -954,7 +1067,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
               {/* Absensi */}
               <div className="space-y-1.5">
                 <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
-                  C. Ketidakhadiran
+                  D. Ketidakhadiran
                 </h3>
                 <table className="w-full text-xs text-left border-collapse border border-slate-400">
                   <tbody className="divide-y divide-slate-300">
@@ -984,7 +1097,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
             {/* Catatan Wali Kelas */}
             <div className="space-y-1.5">
               <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
-                D. Catatan Wali Kelas
+                E. Catatan Wali Kelas
               </h3>
               <div className="border border-slate-400 p-3 rounded text-xs bg-slate-50/50 leading-relaxed text-slate-800">
                 {studentNote?.growthNote
@@ -1013,7 +1126,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
               return (
                 <div className="space-y-1.5">
                   <h3 className="font-bold text-xs uppercase text-slate-900 tracking-wider">
-                    E. Keputusan Kenaikan Kelas / Kelulusan
+                    F. Keputusan Kenaikan Kelas / Kelulusan
                   </h3>
                   <div className={`border-2 p-3 rounded text-xs font-bold ${
                     isTinggalOrGagal
