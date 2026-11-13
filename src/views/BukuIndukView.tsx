@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
 
 interface BukuIndukViewProps {
   school: SchoolProfile;
@@ -74,6 +75,7 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
   const [isBatchPrintMode, setIsBatchPrintMode] = useState(false);
 
   const sortedClassrooms = useMemo(() => sortClassrooms(classrooms), [classrooms]);
+  const sortedSubjects = useMemo(() => sortSubjects(subjects), [subjects]);
 
   // Available admission years
   const availableYearsJoined = useMemo(() => {
@@ -466,7 +468,7 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {subjects.map((sub, idx) => {
+                        {sortedSubjects.map((sub, idx) => {
                           const studentScores = getStudentGrades(activeStudent.id).filter(
                             (sc) => sc.subjectId === sub.id
                           );
@@ -719,7 +721,7 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {subjects.map((sub, sIdx2) => {
+                        {sortedSubjects.map((sub, sIdx2) => {
                           const sc = scores.find((s) => s.studentId === std.id && s.subjectId === sub.id);
                           return (
                             <tr key={sub.id}>
