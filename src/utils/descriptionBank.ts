@@ -4,10 +4,24 @@ export interface SubjectDescriptionRange {
   lowestDesc: string;
 }
 
+export interface SubjectTPDescriptionPattern {
+  id: string;
+  tpId?: string;
+  tpCode?: string;
+  competenceScope: string;
+  optimalPattern: string;
+  improvementPattern: string;
+}
+
 export interface SubjectDescriptionBank {
   subjectId: string;
   subjectName: string;
   ranges: SubjectDescriptionRange[];
+  optimalTemplate?: string;
+  goodTemplate?: string;
+  improvementTemplate?: string;
+  allOptimalFollowUpTemplate?: string;
+  tpPatterns?: SubjectTPDescriptionPattern[];
 }
 
 export const defaultDescriptionBank: SubjectDescriptionBank[] = [
@@ -45,7 +59,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan dengan bimbingan khusus pada materi pokok.',
         lowestDesc: 'Perlu pendampingan intensif dalam pemahaman dasar keimanan, tata cara beribadah, dan pengamalan akhlak.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan yang sangat baik dan optimal pada PAIBP dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman dan pengamalan ajaran PAIBP yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan dan pendampingan berkelanjutan pada materi PAIBP dalam {tps}.',
+    allOptimalFollowUpTemplate: 'Terus pertahankan konsistensi ibadah, keteladanan akhlak mulia, dan pendalaman literasi keagamaan.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-ppkn',
@@ -81,7 +100,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai batas ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam pemahaman hak, kewajiban, dan nilai-nilai dasar negara.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan yang sangat baik dan optimal dalam Pendidikan Pancasila khususnya {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman yang baik mengenai nilai Pancasila dan kewarganegaraan dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan dan diskusi terarah pada Pendidikan Pancasila dalam {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan sikap demokratis, toleran, dan kesadaran berkonstitusi dalam kehidupan sehari-hari.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-bindo',
@@ -117,7 +141,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum dalam pemahaman teks.',
         lowestDesc: 'Perlu bimbingan dan latihan intensif dalam pemahaman bacaan dan penulisan kalimat.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan yang sangat baik dan optimal dalam berbahasa Indonesia khususnya {tps}.',
+    goodTemplate: 'Menunjukkan kemampuan literasi dan pemahaman teks Bahasa Indonesia yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan latihan membaca pemahaman, penyuntingan kaidah EYD, serta menulis terstruktur dalam {tps}.',
+    allOptimalFollowUpTemplate: 'Disarankan terus memperkaya kosakata baku dan mengasah keterampilan menulis kreatif maupun argumentatif.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-mat',
@@ -153,7 +182,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum dengan bimbingan.',
         lowestDesc: 'Perlu bimbingan intensif dan latihan penguasaan konsep dasar hitung serta pengerjaan rumus.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan konsep dan penalaran matematis yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman konsep dan penerapan prosedur matematika yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan dan latihan pemecahan masalah bertahap pada Matematika khususnya {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan ketelitian perhitungan dan eksplorasi soal penalaran matematis tingkat lanjut.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-ipa',
@@ -189,7 +223,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai batas ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam pemahaman konsep dasar ilmu pengetahuan alam dan fenomena fisika/biologi.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan konsep sains dan keterampilan inkuiri ilmiah yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman konsep IPA serta penerapannya dengan baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan dalam analisis konsep ilmiah dan latihan pengamatan/perhitungan IPA pada {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan ketekunan dalam penyelidikan ilmiah dan analisis fenomena alam secara sistematis.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-ips',
@@ -225,7 +264,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam pemahaman materi sosial, geografi, dan sejarah.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan wawasan dan analisis sosial, sejarah, serta ekonomi yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman yang baik terhadap fenomena sosial dan keruangan dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan pemahaman kronologi, analisis sumber daya, serta keterkaitan sosial pada {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan kepedulian sosial dan kemampuan berpikir kritis terhadap dinamika masyarakat.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-bing',
@@ -261,7 +305,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam penguasaan kosakata dasar dan *grammar* bahasa Inggris.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan kemampuan berbahasa Inggris dan penguasaan struktur teks yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman kosakata serta penggunaan ungkapan Bahasa Inggris yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan penguasaan kosakata, tata bahasa (grammar), dan latihan komunikasi Bahasa Inggris pada {tps}.',
+    allOptimalFollowUpTemplate: 'Terus latih keterampilan menyimak, berbicara, membaca, dan menulis Bahasa Inggris secara aktif.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-pjok',
@@ -297,7 +346,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan dan latihan intensif dalam teknik dasar olahraga serta kesehatan jasmani.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan keterampilan gerak, kebugaran, dan sportivitas yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan penguasaan teknik dasar olahraga serta kesadaran pola hidup sehat yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan koordinasi teknik gerak dan pembinaan kebugaran jasmani pada {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan kebugaran fisik, disiplin latihan, dan sikap sportif dalam aktivitas olahraga.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-inf',
@@ -333,7 +387,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam pengoperasian dasar komputer dan literasi digital.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan kemampuan berpikir komputasional dan literasi digital yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman konsep Informatika dan praktik perangkat digital yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan logika algoritmik dan latihan praktik terapan Informatika pada {tps}.',
+    allOptimalFollowUpTemplate: 'Pertahankan kreativitas pemecahan masalah komputasional serta etika dan keamanan bermedia digital.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-seni',
@@ -369,7 +428,12 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam apresiasi dan praktik keterampilan seni serta prakarya.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan daya cipta estetis dan keterampilan berkarya seni/prakarya yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan apresiasi seni dan keterampilan praktik berkarya yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan ketelatenan teknis dan eksplorasi teknik berkarya seni/prakarya pada {tps}.',
+    allOptimalFollowUpTemplate: 'Terus kembangkan orisinalitas karya dan apresiasi terhadap kekayaan seni budaya Nusantara.',
+    tpPatterns: []
   },
   {
     subjectId: 'sub-bmr',
@@ -405,16 +469,64 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
         highestDesc: 'Mencapai ketuntasan minimum.',
         lowestDesc: 'Perlu bimbingan intensif dalam pemahaman nilai budaya dan kearifan lokal Melayu Riau.'
       }
-    ]
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan nilai kearifan lokal dan tradisi Budaya Melayu Riau yang sangat baik dan optimal dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman dan apresiasi yang baik terhadap Budaya Melayu Riau dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan pengenalan kaidah, kosakata, dan praktik tradisi Budaya Melayu Riau pada {tps}.',
+    allOptimalFollowUpTemplate: 'Terus jaga kecintaan serta pengamalan adat bersendi syarak dan tunjuk ajar Melayu dalam pergaulan.',
+    tpPatterns: []
   }
 ];
+
+export const DEFAULT_TP_PATTERNS_FALLBACK = {
+  optimalTemplate: 'Menunjukkan penguasaan yang sangat baik dan optimal dalam {tps}.',
+  goodTemplate: 'Menunjukkan pemahaman dan penguasaan kompetensi yang baik dalam {tps}.',
+  improvementTemplate: 'Perlu penguatan dan pendampingan lebih lanjut dalam {tps}.',
+  allOptimalFollowUpTemplate: 'Pertahankan capaian kompetensi yang sudah baik dan kembangkan pendalaman materi pengayaan.'
+};
+
+/**
+ * Merges saved custom bank records with latest default templates/subjects
+ * without deleting or overwriting existing school edits.
+ */
+export function mergeDescriptionBankWithDefaults(
+  customBank?: SubjectDescriptionBank[]
+): SubjectDescriptionBank[] {
+  if (!Array.isArray(customBank) || customBank.length === 0) {
+    return defaultDescriptionBank;
+  }
+
+  const defaultMap = new Map(defaultDescriptionBank.map((d) => [d.subjectId, d]));
+  const merged: SubjectDescriptionBank[] = customBank.map((entry) => {
+    const def = defaultMap.get(entry.subjectId);
+    return {
+      ...entry,
+      ranges: Array.isArray(entry.ranges) && entry.ranges.length > 0 ? entry.ranges : def?.ranges || [],
+      optimalTemplate: entry.optimalTemplate ?? def?.optimalTemplate ?? DEFAULT_TP_PATTERNS_FALLBACK.optimalTemplate,
+      goodTemplate: entry.goodTemplate ?? def?.goodTemplate ?? DEFAULT_TP_PATTERNS_FALLBACK.goodTemplate,
+      improvementTemplate: entry.improvementTemplate ?? def?.improvementTemplate ?? DEFAULT_TP_PATTERNS_FALLBACK.improvementTemplate,
+      allOptimalFollowUpTemplate:
+        entry.allOptimalFollowUpTemplate ?? def?.allOptimalFollowUpTemplate ?? DEFAULT_TP_PATTERNS_FALLBACK.allOptimalFollowUpTemplate,
+      tpPatterns: Array.isArray(entry.tpPatterns) ? entry.tpPatterns : def?.tpPatterns || []
+    };
+  });
+
+  // Ensure any missing default subject is appended safely
+  defaultDescriptionBank.forEach((def) => {
+    if (!merged.some((m) => m.subjectId === def.subjectId)) {
+      merged.push(def);
+    }
+  });
+
+  return merged;
+}
 
 export function getAutomaticDescription(
   subjectId: string,
   finalScore: number,
   customBank?: SubjectDescriptionBank[]
 ): { highest: string; lowest: string } {
-  const bank = customBank || defaultDescriptionBank;
+  const bank = mergeDescriptionBankWithDefaults(customBank);
   const subConfig = bank.find((b) => b.subjectId === subjectId) || bank[0];
 
   let rangeKey: SubjectDescriptionRange['range'] = '80-84';

@@ -40,7 +40,8 @@ import {
   KokurikulerGroup,
   KokurikulerActivity,
   KokurikulerScore,
-  KokurikulerDescription
+  KokurikulerDescription,
+  AssessmentPolicyConfig
 } from './types/erapor';
 import { Calendar } from 'lucide-react';
 import {
@@ -49,7 +50,16 @@ import {
   getDefaultReportDate
 } from './utils/academicYear';
 import { sortClassrooms } from './utils/classroomSort';
-import { SubjectDescriptionBank } from './utils/descriptionBank';
+import {
+  SubjectDescriptionBank,
+  mergeDescriptionBankWithDefaults
+} from './utils/descriptionBank';
+import {
+  DEFAULT_ASSESSMENT_POLICY,
+  getSummativeTpIds,
+  isPeriodInputLocked,
+  normalizeAssessmentPolicy
+} from './utils/tpAnalysisAndDescription';
 import { Header } from './components/layout/Header';
 import { Sidebar, MenuId } from './components/layout/Sidebar';
 import {
@@ -63,6 +73,8 @@ import {
   saveScoresToFirestoreDirect,
   saveKokurikulerScoresDirect,
   saveKokurikulerDescriptionsDirect,
+  saveAssessmentPolicyDirect,
+  saveDescriptionBankDirect,
   deleteDocFromFirestore,
   surgicalSync,
   reconnectToCloud,
@@ -392,6 +404,22 @@ export default function App() {
         mergeList('kokurikulerScores', payload.kokurikulerScores);
         mergeList('kokurikulerDescriptions', payload.kokurikulerDescriptions);
 
+        if (payload.descriptionBank && payload.descriptionBank.length > 0) {
+          const mergedBank = mergeDescriptionBankWithDefaults(payload.descriptionBank);
+          if (JSON.stringify(prev.descriptionBank) !== JSON.stringify(mergedBank)) {
+            updated.descriptionBank = mergedBank;
+            changed = true;
+          }
+        }
+
+        if (payload.assessmentPolicy) {
+          const normalizedPolicy = normalizeAssessmentPolicy(payload.assessmentPolicy);
+          if (JSON.stringify(prev.assessmentPolicy) !== JSON.stringify(normalizedPolicy)) {
+            updated.assessmentPolicy = normalizedPolicy;
+            changed = true;
+          }
+        }
+
         if (changed) {
           const finalDb = syncUsersWithTeachers(updated);
           saveDatabase(finalDb);
@@ -490,7 +518,15 @@ export default function App() {
                 kokurikulerDescriptions:
                   remoteData.kokurikulerDescriptions !== undefined
                     ? remoteData.kokurikulerDescriptions
-                    : prev.kokurikulerDescriptions
+                    : prev.kokurikulerDescriptions,
+                descriptionBank: mergeDescriptionBankWithDefaults(
+                  remoteData.descriptionBank && remoteData.descriptionBank.length > 0
+                    ? remoteData.descriptionBank
+                    : prev.descriptionBank
+                ),
+                assessmentPolicy: normalizeAssessmentPolicy(
+                  remoteData.assessmentPolicy || prev.assessmentPolicy
+                )
               };
               const cleaned = sanitizeTeachingAssignments(syncUsersWithTeachers(merged));
 
@@ -869,12 +905,22 @@ export default function App() {
 
   // Handlers for Scores (Batch save & Real-time Cloud Sync)
   const handleSaveScores = (newScores: AssessmentScore[], notification?: AppNotification) => {
+    const canBypassLock = currentUser?.role === 'admin';
+    const allowedScores = canBypassLock
+      ? newScores
+      : newScores.filter(
+          (sc) => !isPeriodInputLocked(db.assessmentPolicy, sc.academicYear, sc.semester)
+        );
+    if (allowedScores.length === 0 && newScores.length > 0) {
+      return;
+    }
+
     const scoreKey = (s: AssessmentScore) =>
       `${s.studentId}-${s.subjectId}-${(s.academicYear || '').replace(/\//g, '_')}-${s.semester}`;
 
     updateDbAndSave((prev) => {
       const scoreMap = new Map(prev.scores.map((s) => [scoreKey(s), s]));
-      newScores.forEach((sc) => {
+      allowedScores.forEach((sc) => {
         scoreMap.set(scoreKey(sc), sc);
       });
 
@@ -893,9 +939,9 @@ export default function App() {
     }, true); // skip whole-database auto sync! We send targeted scores below!
 
     // Save directly to Cloud Firestore in real time
-    saveScoresToFirestoreDirect(newScores, notification).catch(() => {});
+    saveScoresToFirestoreDirect(allowedScores, notification).catch(() => {});
 
-    logActivity(currentUser, 'Simpan Nilai Siswa', `Menyimpan dan mengkalkulasi ${newScores.length} data nilai.`);
+    logActivity(currentUser, 'Simpan Nilai Siswa', `Menyimpan dan mengkalkulasi ${allowedScores.length} data nilai.`);
   };
 
   const handleMarkNotificationRead = (notifId: string) => {
@@ -920,8 +966,26 @@ export default function App() {
 
   // Handlers for Description Bank
   const handleSaveDescriptionBank = (bank: SubjectDescriptionBank[]) => {
-    updateDbAndSave((prev) => ({ ...prev, descriptionBank: bank }));
-    logActivity(currentUser, 'Simpan Bank Deskripsi', 'Memperbarui bank deskripsi nilai otomatis.');
+    const normalized = mergeDescriptionBankWithDefaults(bank);
+    updateDbAndSave((prev) => ({ ...prev, descriptionBank: normalized }), true);
+    saveDescriptionBankDirect(normalized, currentUser?.name).catch(() => {});
+    logActivity(currentUser, 'Simpan Bank Deskripsi', 'Memperbarui bank deskripsi dan pola capaian TP otomatis.');
+  };
+
+  // Handler for Assessment Policy & Period Input Lock (Admin)
+  const handleSaveAssessmentPolicy = (policy: AssessmentPolicyConfig) => {
+    const normalized = normalizeAssessmentPolicy({
+      ...policy,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.name || policy.updatedBy || 'Administrator'
+    });
+    updateDbAndSave((prev) => ({ ...prev, assessmentPolicy: normalized }), true);
+    saveAssessmentPolicyDirect(normalized).catch(() => {});
+    logActivity(
+      currentUser,
+      'Simpan Kebijakan Penilaian',
+      `Memperbarui kebijakan ketercapaian TP & status kunci input (${normalized.isInputLocked ? 'Terkunci' : 'Terbuka'}).`
+    );
   };
 
   // Handlers for Class Promotion & Graduation
@@ -1192,6 +1256,9 @@ export default function App() {
 
   // Kurikulum Merdeka 2025 Handlers
   const handleSaveFormative = (fa: FormativeAssessment) => {
+    if (currentUser?.role !== 'admin' && isPeriodInputLocked(db.assessmentPolicy, fa.academicYear, fa.semester)) {
+      return;
+    }
     updateDbAndSave(
       (prev) => {
         const filtered = (prev.formativeAssessments || []).filter(a => a.id !== fa.id);
@@ -1203,12 +1270,15 @@ export default function App() {
   };
 
   const handleSaveSummative = (sa: SummativeAssessment) => {
+    if (currentUser?.role !== 'admin' && isPeriodInputLocked(db.assessmentPolicy, sa.academicYear, sa.semester)) {
+      return;
+    }
     updateDbAndSave(
       (prev) => {
         const filtered = (prev.summativeAssessments || []).filter(a => a.id !== sa.id);
         const newSummatives = [...filtered, sa];
 
-        // Harmonize & synchronize with prev.scores in real time
+        // Harmonize & synchronize with prev.scores in real time (preserving multi-TP linkage)
         const studentSummatives = newSummatives.filter(
           a =>
             a.studentId === sa.studentId &&
@@ -1220,8 +1290,10 @@ export default function App() {
         const tpAverages: Record<string, number> = {};
         const tpGroups: Record<string, number[]> = {};
         studentSummatives.forEach(a => {
-          if (!tpGroups[a.tpId]) tpGroups[a.tpId] = [];
-          tpGroups[a.tpId].push(a.score);
+          getSummativeTpIds(a).forEach((tpId) => {
+            if (!tpGroups[tpId]) tpGroups[tpId] = [];
+            tpGroups[tpId].push(a.score);
+          });
         });
         Object.keys(tpGroups).forEach(tpId => {
           const vals = tpGroups[tpId];
@@ -1241,6 +1313,10 @@ export default function App() {
         const sasScore = existingScore?.sumatifAkhirSemester || 0;
         const finalCalculated = sasScore > 0 ? Math.round(avgMateri * 0.5 + sasScore * 0.5) : avgMateri;
         const pred = calculatePredicate(finalCalculated, 75);
+        const isManualOrLockedDesc =
+          existingScore?.descriptionStatus === 'Sudah diedit guru' ||
+          existingScore?.descriptionStatus === 'Sudah disimpan' ||
+          existingScore?.descriptionStatus === 'Sudah difinalisasi';
 
         const updatedScore: AssessmentScore = existingScore
           ? {
@@ -1248,6 +1324,9 @@ export default function App() {
               sumatifMateriScores: { ...existingScore.sumatifMateriScores, ...tpAverages },
               finalScore: finalCalculated,
               predicate: pred,
+              descriptionStatus: isManualOrLockedDesc
+                ? existingScore.descriptionStatus
+                : (existingScore.descriptionStatus || 'Belum dibuat'),
               updatedAt: new Date().toISOString()
             }
           : {
@@ -1264,6 +1343,7 @@ export default function App() {
               predicate: pred,
               highestCompetenceDesc: '',
               lowestCompetenceDesc: '',
+              descriptionStatus: 'Belum dibuat',
               updatedAt: new Date().toISOString(),
               status: 'SELESAI'
             };
@@ -1287,6 +1367,14 @@ export default function App() {
   };
 
   const handleDeleteSummative = (id: string) => {
+    const existing = (db.summativeAssessments || []).find(a => a.id === id);
+    if (
+      existing &&
+      currentUser?.role !== 'admin' &&
+      isPeriodInputLocked(db.assessmentPolicy, existing.academicYear, existing.semester)
+    ) {
+      return;
+    }
     updateDbAndSave((prev) => ({
       ...prev,
       summativeAssessments: (prev.summativeAssessments || []).filter(a => a.id !== id)
@@ -1715,6 +1803,11 @@ export default function App() {
               onSaveObjective={handleSaveObjective}
               onDeleteObjective={handleDeleteObjective}
               currentUser={effectiveUser}
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              teachers={db.teachers}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
             />
           )}
 
@@ -1768,6 +1861,7 @@ export default function App() {
               teachingAssignments={db.teachingAssignments || []}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
             />
           )}
 
@@ -1784,6 +1878,7 @@ export default function App() {
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
             />
           )}
 
@@ -1793,12 +1888,16 @@ export default function App() {
               students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               kktpConfigs={db.kktpConfigs || EMPTY_ARRAY}
               finalScoreConfigs={db.finalScoreConfigs || EMPTY_ARRAY}
               scores={db.scores}
+              descriptionBank={db.descriptionBank}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
               onSaveScores={handleSaveScores}
               onSaveConfig={handleSaveFinalScoreConfig}
+              onNavigateToDescriptions={() => handleSelectMenu('deskripsi-nilai')}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
@@ -1942,6 +2041,10 @@ export default function App() {
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
+              kktpConfigs={db.kktpConfigs || EMPTY_ARRAY}
+              descriptionBank={db.descriptionBank}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
             />
           )}
 
@@ -1966,11 +2069,17 @@ export default function App() {
               students={db.students}
               scores={db.scores}
               learningObjectives={db.learningObjectives}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
+              kktpConfigs={db.kktpConfigs || EMPTY_ARRAY}
               descriptionBank={db.descriptionBank}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
               teachers={db.teachers}
               teachingAssignments={db.teachingAssignments || []}
               onSaveScores={handleSaveScores}
               onSaveDescriptionBank={handleSaveDescriptionBank}
+              onSaveAssessmentPolicy={handleSaveAssessmentPolicy}
+              onBack={() => handleSelectMenu('input-nilai')}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}

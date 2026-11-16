@@ -43,8 +43,11 @@ import {
   KokurikulerGroup,
   KokurikulerActivity,
   KokurikulerScore,
-  KokurikulerDescription
+  KokurikulerDescription,
+  AssessmentPolicyConfig
 } from '../types/erapor';
+import { SubjectDescriptionBank, mergeDescriptionBankWithDefaults } from '../utils/descriptionBank';
+import { normalizeAssessmentPolicy } from '../utils/tpAnalysisAndDescription';
 import { sortClassrooms } from '../utils/classroomSort';
 
 export type CloudSyncStatus = 'connected' | 'syncing' | 'synced' | 'offline' | 'error' | 'quota_exceeded';
@@ -643,8 +646,8 @@ export async function syncAllToFirestore(
 
     await commitInBatches(reportOps, 'Mengunggah data rapor & administrasi akademik');
 
-    // 5. Master App State Metadata (5/5)
-    onProgress?.('Menyelesaikan metadata status aplikasi (5/5)...');
+    // 5. Master App State Metadata + Description Bank & Assessment Policy (5/5)
+    onProgress?.('Menyelesaikan metadata status, bank deskripsi, & kebijakan nilai (5/5)...');
     const nowTimeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     await withTimeout(
       setDoc(
@@ -662,6 +665,30 @@ export async function syncAllToFirestore(
       ),
       15000
     );
+    if (Array.isArray(dbData.descriptionBank) && dbData.descriptionBank.length > 0) {
+      await withTimeout(
+        setDoc(
+          doc(db, 'application_settings', 'description_bank'),
+          cleanForFirestore({
+            items: dbData.descriptionBank,
+            updatedAt: new Date().toISOString(),
+            updatedBy: user?.name || 'Administrator'
+          }),
+          { merge: true }
+        ),
+        15000
+      );
+    }
+    if (dbData.assessmentPolicy) {
+      await withTimeout(
+        setDoc(
+          doc(db, 'application_settings', 'assessment_policy'),
+          cleanForFirestore(dbData.assessmentPolicy),
+          { merge: true }
+        ),
+        15000
+      );
+    }
     totalCount += 1;
 
     updateSyncState({
@@ -770,7 +797,9 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       kokurikulerGroupsSnap,
       kokurikulerActivitiesSnap,
       kokurikulerScoresSnap,
-      kokurikulerDescriptionsSnap
+      kokurikulerDescriptionsSnap,
+      descriptionBankDoc,
+      assessmentPolicyDoc
     ] = await Promise.all([
       getDoc(doc(db, 'schools', 'smpn1rangsang')),
       getDoc(doc(db, 'application_settings', 'tombstones')).catch(() => null),
@@ -796,12 +825,23 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'kokurikuler_groups')).catch(() => null),
       getDocs(collection(db, 'kokurikuler_activities')).catch(() => null),
       getDocs(collection(db, 'kokurikuler_scores')).catch(() => null),
-      getDocs(collection(db, 'kokurikuler_descriptions')).catch(() => null)
+      getDocs(collection(db, 'kokurikuler_descriptions')).catch(() => null),
+      getDoc(doc(db, 'application_settings', 'description_bank')).catch(() => null),
+      getDoc(doc(db, 'application_settings', 'assessment_policy')).catch(() => null)
     ]);
 
     if (tombstonesDoc && (tombstonesDoc as any).exists && (tombstonesDoc as any).exists()) {
       updateTombstonesFromCloud((tombstonesDoc as any).data() as Record<string, string[]>);
     }
+
+    const descriptionBankData =
+      descriptionBankDoc && (descriptionBankDoc as any).exists && (descriptionBankDoc as any).exists()
+        ? ((descriptionBankDoc as any).data()?.items as SubjectDescriptionBank[] | undefined)
+        : undefined;
+    const assessmentPolicyData =
+      assessmentPolicyDoc && (assessmentPolicyDoc as any).exists && (assessmentPolicyDoc as any).exists()
+        ? ((assessmentPolicyDoc as any).data() as AssessmentPolicyConfig | undefined)
+        : undefined;
 
     const hasAnyCloudData = 
       schoolDoc.exists() || 
@@ -846,6 +886,12 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
       kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
       finalScoreConfigs: finalConfigSnap.docs.map((d) => d.data() as SubjectFinalScoreConfig),
+      ...(Array.isArray(descriptionBankData) && descriptionBankData.length > 0
+        ? { descriptionBank: mergeDescriptionBankWithDefaults(descriptionBankData) }
+        : {}),
+      ...(assessmentPolicyData
+        ? { assessmentPolicy: normalizeAssessmentPolicy(assessmentPolicyData) }
+        : {}),
       ...(kokurikulerDimensionsSnap && !kokurikulerDimensionsSnap.empty
         ? { kokurikulerDimensions: kokurikulerDimensionsSnap.docs.map((d) => d.data() as KokurikulerDimensionMaster) }
         : {}),
@@ -950,6 +996,8 @@ export interface FirestoreRealtimePayload {
   kokurikulerActivities?: KokurikulerActivity[];
   kokurikulerScores?: KokurikulerScore[];
   kokurikulerDescriptions?: KokurikulerDescription[];
+  descriptionBank?: SubjectDescriptionBank[];
+  assessmentPolicy?: AssessmentPolicyConfig;
   removedDocIds?: Record<string, string[]>;
 }
 
@@ -1034,6 +1082,19 @@ export function listenToFirestoreRealtime(
     onSnapshot(doc(db, 'application_settings', 'tombstones'), (snap) => {
       if (snap.exists()) {
         updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
+      }
+    }),
+    onSnapshot(doc(db, 'application_settings', 'description_bank'), (snap) => {
+      if (snap.exists()) {
+        const items = snap.data()?.items;
+        if (Array.isArray(items) && items.length > 0) {
+          onDataUpdate({ descriptionBank: mergeDescriptionBankWithDefaults(items as SubjectDescriptionBank[]) });
+        }
+      }
+    }),
+    onSnapshot(doc(db, 'application_settings', 'assessment_policy'), (snap) => {
+      if (snap.exists()) {
+        onDataUpdate({ assessmentPolicy: normalizeAssessmentPolicy(snap.data() as AssessmentPolicyConfig) });
       }
     })
   ];
@@ -1268,6 +1329,29 @@ export async function saveKokurikulerDescriptionsDirect(
     const errMsg = err?.message || String(err);
     return { success: false, count: 0, error: errMsg };
   }
+}
+
+/**
+ * Direct verified save for AssessmentPolicyConfig to application_settings/assessment_policy.
+ */
+export async function saveAssessmentPolicyDirect(
+  policy: AssessmentPolicyConfig
+): Promise<{ success: boolean; error?: string; quotaExceeded?: boolean }> {
+  return surgicalSync('application_settings', 'assessment_policy', policy);
+}
+
+/**
+ * Direct verified save for DescriptionBank to application_settings/description_bank.
+ */
+export async function saveDescriptionBankDirect(
+  bank: SubjectDescriptionBank[],
+  updatedBy?: string
+): Promise<{ success: boolean; error?: string; quotaExceeded?: boolean }> {
+  return surgicalSync('application_settings', 'description_bank', {
+    items: bank,
+    updatedAt: new Date().toISOString(),
+    updatedBy: updatedBy || 'Administrator'
+  });
 }
 
 

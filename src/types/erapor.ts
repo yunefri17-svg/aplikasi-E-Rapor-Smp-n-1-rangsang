@@ -143,7 +143,38 @@ export interface LearningObjective {
   code: string; // e.g. "TP 7.1"
   description: string;
   semester: 'Ganjil' | 'Genap';
+  academicYear?: string; // Optional period binding; if omitted applies to all years for that grade/semester
+  materi?: string; // Lingkup materi / topik kompetensi
+  phase?: string; // e.g. "Fase D"
+  createdByTeacherId?: string;
+  updatedAt?: string;
 }
+
+export type TPAttainmentStatus =
+  | 'tercapai_optimal'
+  | 'tercapai_baik'
+  | 'perlu_penguatan'
+  | 'belum_cukup_bukti';
+
+export interface TPAttainmentSummary {
+  tpId: string;
+  code: string;
+  description: string;
+  materi?: string;
+  status: TPAttainmentStatus;
+  summativeAvg?: number;
+  summativeCount: number;
+  formativeCount: number;
+  formativeStatuses: ('Tercapai Optimal' | 'Tercapai Baik' | 'Perlu Penguatan')[];
+  evidenceSummary: string;
+}
+
+export type AssessmentDescriptionStatus =
+  | 'Belum dibuat'
+  | 'Draft otomatis'
+  | 'Sudah diedit guru'
+  | 'Sudah disimpan'
+  | 'Sudah difinalisasi';
 
 export interface AssessmentScore {
   id: string;
@@ -156,7 +187,9 @@ export interface AssessmentScore {
   teacherId?: string;
   teacherName?: string;
   academicYear: string;
+  academicYearId?: string;
   semester: 'Ganjil' | 'Genap';
+  semesterId?: string;
   formatifScores: Record<string, number>; // TP ID -> Score 0-100
   sumatifMateriScores: Record<string, number>; // TP / Scope -> Score 0-100
   sumatifAkhirSemester: number; // Test score SAS/ASAS
@@ -164,12 +197,27 @@ export interface AssessmentScore {
   predicate: 'A' | 'B' | 'C' | 'D';
   highestCompetenceDesc: string;
   lowestCompetenceDesc: string;
+  // Enhanced TP-based automated description fields
+  selectedOptimalTpIds?: string[]; // Per-student teacher-checked TP optimal
+  selectedImprovementTpIds?: string[]; // Per-student teacher-checked TP perlu pendampingan
+  manualFinalScore?: number; // Direct teacher-input Nilai Akhir Rapor (0-100)
+  learningObjectiveIds?: string[];
+  formativeAssessmentIds?: string[];
+  summativeAssessmentIds?: string[];
+  achievedObjectives?: TPAttainmentSummary[];
+  objectivesForImprovement?: TPAttainmentSummary[];
+  tpAnalysis?: TPAttainmentSummary[];
+  generatedDescription?: string;
+  finalDescription?: string;
+  descriptionStatus?: AssessmentDescriptionStatus;
+  completenessWarning?: string;
   notes?: string;
   status?: 'BELUM' | 'DALAM PROSES' | 'PROSES' | 'SELESAI' | 'REVISI' | 'TERKUNCI';
   revisionNote?: string;
   updatedAt: string;
   createdAt?: string;
   updatedBy?: string;
+  updatedById?: string;
 }
 
 export interface AppNotification {
@@ -248,6 +296,7 @@ export interface AuditLog {
 // Kurikulum Merdeka 2025 Modules
 export type FormativeTechnique = 'observasi' | 'tanya jawab' | 'diskusi' | 'kuis' | 'latihan' | 'praktik' | 'tugas';
 export type SummativeTechnique = 'tes tertulis' | 'praktik' | 'proyek' | 'produk' | 'lainnya';
+export type FormativeMasteryStatus = 'Tercapai Optimal' | 'Tercapai Baik' | 'Perlu Penguatan';
 
 export interface FormativeAssessment {
   id: string;
@@ -255,9 +304,12 @@ export interface FormativeAssessment {
   teacherId: string;
   subjectId: string;
   classId: string;
-  tpId: string;
+  tpId: string; // Primary TP ID (backward compatible)
+  tpIds?: string[]; // Supports multi-TP formative assessment
   date: string;
   technique: FormativeTechnique;
+  masteryStatus?: FormativeMasteryStatus;
+  score?: number; // Optional diagnostic score 0-100 if given by teacher
   observation: string;
   feedback: string;
   academicYear: string;
@@ -271,7 +323,9 @@ export interface SummativeAssessment {
   teacherId: string;
   subjectId: string;
   classId: string;
-  tpId: string;
+  tpId: string; // Primary TP ID (backward compatible)
+  tpIds?: string[]; // Supports 1 assessment covering multiple TPs
+  assessmentTitle?: string; // e.g. "UH 1 Teks Deskripsi" or "Proyek Ekosistem"
   date: string;
   technique: SummativeTechnique;
   score: number;
@@ -303,6 +357,23 @@ export interface SubjectFinalScoreConfig {
   method: FinalScoreMethod;
   tpWeights?: Record<string, number>; // tpId -> weight
   sasWeight?: number; // Weight for Summative Akhir Semester
+}
+
+export interface AssessmentPolicyConfig {
+  id: 'assessment_policy';
+  optimalMinScore: number; // Default 88 -> TP dicapai optimal
+  goodMinScore: number; // Default 75 -> TP dicapai baik (batas KKTP)
+  needStrengtheningBelow: number; // Default 75 -> TP perlu penguatan
+  minimumTpEvidenceCount: number; // Default 1 -> Minimal TP dinilai sebelum deskripsi dianggap lengkap
+  usePerTpKktpIfConfigured: boolean; // Default true
+  formulaPolicyMode: 'existing_default' | 'confirmed_custom';
+  confirmedFormulaNote?: string;
+  includeFormativeInFinalScore: boolean; // Default false (formatif tidak mengubah bobot angka kecuali dikonfirmasi admin)
+  isInputLocked: boolean; // Kunci global periode aktif
+  lockedPeriods?: Record<string, boolean>; // e.g. "2026/2027_Ganjil": true
+  lockedMessage?: string;
+  updatedAt: string;
+  updatedBy?: string;
 }
 
 export interface AcademicSemesterConfig {

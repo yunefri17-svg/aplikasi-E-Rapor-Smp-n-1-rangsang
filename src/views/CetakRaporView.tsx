@@ -42,6 +42,7 @@ import { TutWuriHandayaniLogo } from '../components/common/TutWuriHandayaniLogo'
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortSubjects } from '../utils/subjectSort';
+import { resolveRaporCompetenceDisplay } from '../utils/tpAnalysisAndDescription';
 
 interface CetakRaporViewProps {
   school: SchoolProfile;
@@ -172,11 +173,16 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
 
   // Check completeness for data verification notice
   const missingSubjects = sortedSubjects.filter((sub) => !scoreLookup.has(sub.id));
+  const incompleteDescSubjects = sortedSubjects.filter((sub) => {
+    const sc = scoreLookup.get(sub.id);
+    return Boolean(sc && resolveRaporCompetenceDisplay(sc).isIncompleteDescription);
+  });
   const isDataComplete =
     currentStudent &&
     currentStudent.nisn &&
     (currentStudent.fatherName || currentStudent.motherName) &&
-    missingSubjects.length === 0;
+    missingSubjects.length === 0 &&
+    incompleteDescSubjects.length === 0;
 
   // Kokurikuler data for the current student (filtered strictly by period)
   const studentKokGroups = kokurikulerGroups.filter(
@@ -426,6 +432,13 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                   Masih terdapat <strong>{missingSubjects.length} mata pelajaran</strong> yang belum diisi nilainya untuk siswa ini (
                   {missingSubjects.map((s) => s.name).slice(0, 3).join(', ')}
                   {missingSubjects.length > 3 ? ', dsb.' : ''}).
+                </li>
+              )}
+              {incompleteDescSubjects.length > 0 && (
+                <li>
+                  Terdapat <strong>{incompleteDescSubjects.length} mata pelajaran</strong> yang nilai angkanya sudah masuk namun deskripsi capaian kompetensinya belum dibuat/dilengkapi (
+                  {incompleteDescSubjects.map((s) => s.name).slice(0, 3).join(', ')}
+                  {incompleteDescSubjects.length > 3 ? ', dsb.' : ''}).
                 </li>
               )}
               {!currentStudent?.nisn && <li>NISN siswa belum tercatat di data induk.</li>}
@@ -928,8 +941,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                   {sortedSubjects.map((sub, idx) => {
                     const sc = scoreLookup.get(sub.id);
                     const finalVal = sc?.finalScore !== undefined ? sc.finalScore : '-';
-                    const highest = sc?.highestCompetenceDesc;
-                    const lowest = sc?.lowestCompetenceDesc;
+                    const display = resolveRaporCompetenceDisplay(sc);
 
                     return (
                       <tr key={sub.id} className="align-top">
@@ -943,13 +955,12 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                           {finalVal}
                         </td>
                         <td className="px-3 py-2 text-slate-800 leading-relaxed text-[11px] space-y-1">
-                          {sc ? (
-                            <>
-                              {highest && <div>{highest}</div>}
-                              {lowest && <div>{lowest}</div>}
-                            </>
+                          {display.isMissingScore ? (
+                            <span className="text-slate-400 italic">{display.text}</span>
+                          ) : display.isIncompleteDescription ? (
+                            <span className="text-amber-700 italic">{display.text}</span>
                           ) : (
-                            <span className="text-slate-400 italic">Nilai belum diinput oleh guru pengampu.</span>
+                            display.parts.map((part, pIdx) => <div key={pIdx}>{part}</div>)
                           )}
                         </td>
                       </tr>

@@ -221,6 +221,77 @@ service cloud.firestore {
     }
 
     // =========================================================================
+    // INTRAKURIKULER FORMATIF, SUMATIF, & DESKRIPSI RAPOR (Non-destructive + Period Lock)
+    // =========================================================================
+    function isAssessmentPeriodUnlocked(academicYear, semester) {
+      return !exists(/databases/$(database)/documents/application_settings/assessment_policy)
+        || (
+          get(/databases/$(database)/documents/application_settings/assessment_policy).data.get('isInputLocked', false) != true
+          && get(/databases/$(database)/documents/application_settings/assessment_policy).data.get('lockedPeriods', {}).get(academicYear + '_' + semester, false) != true
+        );
+    }
+
+    function isValidScoreNumber(val) {
+      return val is number && val >= 0 && val <= 100;
+    }
+
+    function isValidAssessmentScoreDoc(data) {
+      return data.keys().hasAll([
+          'id', 'studentId', 'subjectId', 'classId', 'academicYear',
+          'semester', 'finalScore', 'updatedAt'
+        ])
+        && isStrBounded(data.id, 1, 256)
+        && isStrBounded(data.studentId, 1, 128)
+        && isStrBounded(data.subjectId, 1, 128)
+        && isStrBounded(data.classId, 1, 128)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isValidScoreNumber(data.finalScore)
+        && isStrBounded(data.updatedAt, 4, 64)
+        && (
+          !('descriptionStatus' in data)
+          || data.descriptionStatus in ['Belum dibuat', 'Draft otomatis', 'Sudah diedit guru', 'Sudah disimpan', 'Sudah difinalisasi']
+        )
+        && (!('selectedOptimalTpIds' in data) || data.selectedOptimalTpIds is list)
+        && (!('selectedImprovementTpIds' in data) || data.selectedImprovementTpIds is list)
+        && (!('manualFinalScore' in data) || data.manualFinalScore == null || isValidScoreNumber(data.manualFinalScore));
+    }
+
+    function isValidFormativeDoc(data) {
+      return data.keys().hasAll([
+          'id', 'studentId', 'teacherId', 'subjectId', 'classId',
+          'tpId', 'academicYear', 'semester', 'updatedAt'
+        ])
+        && isStrBounded(data.id, 1, 256)
+        && isStrBounded(data.studentId, 1, 128)
+        && isStrBounded(data.teacherId, 1, 128)
+        && isStrBounded(data.subjectId, 1, 128)
+        && isStrBounded(data.classId, 1, 128)
+        && isStrBounded(data.tpId, 1, 128)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isStrBounded(data.updatedAt, 4, 64)
+        && (!('score' in data) || data.score == null || isValidScoreNumber(data.score));
+    }
+
+    function isValidSummativeDoc(data) {
+      return data.keys().hasAll([
+          'id', 'studentId', 'teacherId', 'subjectId', 'classId',
+          'tpId', 'score', 'academicYear', 'semester', 'updatedAt'
+        ])
+        && isStrBounded(data.id, 1, 256)
+        && isStrBounded(data.studentId, 1, 128)
+        && isStrBounded(data.teacherId, 1, 128)
+        && isStrBounded(data.subjectId, 1, 128)
+        && isStrBounded(data.classId, 1, 128)
+        && isStrBounded(data.tpId, 1, 128)
+        && isValidScoreNumber(data.score)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    // =========================================================================
     // EXISTING SCHOOL COLLECTIONS (Preserved for full multi-device & Vercel compatibility)
     // =========================================================================
     match /audit_logs/{logId} {
@@ -237,9 +308,46 @@ service cloud.firestore {
     match /curricula/{docId} { allow read, write: if true; }
     match /assessments/{docId} { allow read, write: if true; }
     match /teaching_assignments/{docId} { allow read, write: if true; }
-    match /assessment_scores/{docId} { allow read, write: if true; }
-    match /formative_assessments/{docId} { allow read, write: if true; }
-    match /summative_assessments/{docId} { allow read, write: if true; }
+
+    match /assessment_scores/{docId} {
+      allow read: if true;
+      allow create, update: if isStrBounded(docId, 1, 256)
+        && isValidAssessmentScoreDoc(request.resource.data)
+        && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
+      allow delete: if isStrBounded(docId, 1, 256)
+        && (
+          !('academicYear' in resource.data)
+          || !('semester' in resource.data)
+          || isAssessmentPeriodUnlocked(resource.data.academicYear, resource.data.semester)
+        );
+    }
+
+    match /formative_assessments/{docId} {
+      allow read: if true;
+      allow create, update: if isStrBounded(docId, 1, 256)
+        && isValidFormativeDoc(request.resource.data)
+        && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
+      allow delete: if isStrBounded(docId, 1, 256)
+        && (
+          !('academicYear' in resource.data)
+          || !('semester' in resource.data)
+          || isAssessmentPeriodUnlocked(resource.data.academicYear, resource.data.semester)
+        );
+    }
+
+    match /summative_assessments/{docId} {
+      allow read: if true;
+      allow create, update: if isStrBounded(docId, 1, 256)
+        && isValidSummativeDoc(request.resource.data)
+        && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
+      allow delete: if isStrBounded(docId, 1, 256)
+        && (
+          !('academicYear' in resource.data)
+          || !('semester' in resource.data)
+          || isAssessmentPeriodUnlocked(resource.data.academicYear, resource.data.semester)
+        );
+    }
+
     match /kktp_configs/{docId} { allow read, write: if true; }
     match /final_score_configs/{docId} { allow read, write: if true; }
     match /attendance/{docId} { allow read, write: if true; }

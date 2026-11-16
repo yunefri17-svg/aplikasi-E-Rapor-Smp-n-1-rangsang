@@ -28,7 +28,8 @@ import {
   KokurikulerGroup,
   KokurikulerActivity,
   KokurikulerScore,
-  KokurikulerDescription
+  KokurikulerDescription,
+  AssessmentPolicyConfig
 } from '../types/erapor';
 import {
   initialSchoolProfile,
@@ -57,7 +58,15 @@ import {
 } from '../data/initialData';
 import { syncProfileAcademicYear } from '../utils/academicYear';
 import { sortClassrooms } from '../utils/classroomSort';
-import { SubjectDescriptionBank, defaultDescriptionBank } from '../utils/descriptionBank';
+import {
+  SubjectDescriptionBank,
+  defaultDescriptionBank,
+  mergeDescriptionBankWithDefaults
+} from '../utils/descriptionBank';
+import {
+  DEFAULT_ASSESSMENT_POLICY,
+  normalizeAssessmentPolicy
+} from '../utils/tpAnalysisAndDescription';
 import {
   OFFICIAL_KOKURIKULER_DIMENSIONS,
   OFFICIAL_KOKURIKULER_THEMES
@@ -100,6 +109,7 @@ export interface AppDatabase {
   kokurikulerActivities: KokurikulerActivity[];
   kokurikulerScores: KokurikulerScore[];
   kokurikulerDescriptions: KokurikulerDescription[];
+  assessmentPolicy?: AssessmentPolicyConfig;
 }
 
 
@@ -170,7 +180,8 @@ export const loadDatabase = (): AppDatabase => {
         kokurikulerGroups: [],
         kokurikulerActivities: [],
         kokurikulerScores: [],
-        kokurikulerDescriptions: []
+        kokurikulerDescriptions: [],
+        assessmentPolicy: DEFAULT_ASSESSMENT_POLICY
       };
       saveDatabase(initialDb);
       return initialDb;
@@ -270,7 +281,7 @@ export const loadDatabase = (): AppDatabase => {
         users: parsed.users || initialUsers,
         auditLogs: parsed.auditLogs || initialAuditLogs,
         notifications: parsed.notifications || [],
-        descriptionBank: parsed.descriptionBank || defaultDescriptionBank,
+        descriptionBank: mergeDescriptionBankWithDefaults(parsed.descriptionBank),
         teachingAssignments: loadedTeachingAssignments,
         formativeAssessments: parsed.formativeAssessments?.length ? parsed.formativeAssessments : initialFormativeAssessments,
         summativeAssessments: parsed.summativeAssessments?.length ? parsed.summativeAssessments : initialSummativeAssessments,
@@ -289,7 +300,8 @@ export const loadDatabase = (): AppDatabase => {
         kokurikulerGroups: Array.isArray(parsed.kokurikulerGroups) ? parsed.kokurikulerGroups : [],
         kokurikulerActivities: Array.isArray(parsed.kokurikulerActivities) ? parsed.kokurikulerActivities : [],
         kokurikulerScores: Array.isArray(parsed.kokurikulerScores) ? parsed.kokurikulerScores : [],
-        kokurikulerDescriptions: Array.isArray(parsed.kokurikulerDescriptions) ? parsed.kokurikulerDescriptions : []
+        kokurikulerDescriptions: Array.isArray(parsed.kokurikulerDescriptions) ? parsed.kokurikulerDescriptions : [],
+        assessmentPolicy: normalizeAssessmentPolicy(parsed.assessmentPolicy)
       })
     );
 
@@ -328,7 +340,8 @@ export const loadDatabase = (): AppDatabase => {
       kokurikulerGroups: [],
       kokurikulerActivities: [],
       kokurikulerScores: [],
-      kokurikulerDescriptions: []
+      kokurikulerDescriptions: [],
+      assessmentPolicy: DEFAULT_ASSESSMENT_POLICY
     };
   }
 };

@@ -231,7 +231,12 @@
         "gradeLevel": { "type": "string", "description": "Tingkat (7, 8, 9)", "required": true },
         "code": { "type": "string", "description": "Kode TP", "required": true },
         "description": { "type": "string", "description": "Deskripsi TP / kompetensi", "required": true },
-        "semester": { "type": "string", "description": "Ganjil / Genap", "required": true }
+        "semester": { "type": "string", "description": "Ganjil / Genap", "required": true },
+        "materi": { "type": "string", "description": "Lingkup materi / kompetensi TP", "required": false },
+        "phase": { "type": "string", "description": "Fase pembelajaran (Fase D)", "required": false },
+        "academicYear": { "type": "string", "description": "Tahun ajaran opsional", "required": false },
+        "createdByTeacherId": { "type": "string", "description": "ID guru penyusun TP", "required": false },
+        "updatedAt": { "type": "string", "description": "Waktu pembaruan TP", "required": false }
       },
       "rules": {
         "read": "isAuthenticated()",
@@ -239,7 +244,7 @@
       }
     },
     "AssessmentScore": {
-      "description": "Pengolahan nilai formatif, sumatif materi, SAS, dan nilai akhir rapor siswa",
+      "description": "Pengolahan nilai formatif, sumatif materi, SAS, nilai akhir rapor, serta deskripsi capaian kompetensi berbasis TP",
       "collectionName": "assessment_scores",
       "fields": {
         "id": { "type": "string", "description": "ID unik nilai", "required": true },
@@ -250,17 +255,113 @@
         "semester": { "type": "string", "description": "Semester Ganjil / Genap", "required": true },
         "formatifScores": { "type": "map", "description": "Map nilai formatif", "required": false },
         "sumatifMateriScores": { "type": "map", "description": "Map nilai sumatif lingkup materi", "required": false },
-        "sumatifAkhirSemester": { "type": "number", "description": "Nilai sumatif akhir semester (SAS)", "required": true },
+        "sumatifAkhirSemester": { "type": "number", "description": "Nilai sumatif akhir semester (SAS)", "required": false },
         "finalScore": { "type": "number", "description": "Nilai akhir rapor (0-100)", "required": true },
         "predicate": { "type": "string", "description": "Predikat nilai A/B/C/D", "required": true },
-        "highestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian tertinggi", "required": true },
-        "lowestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian terendah yang perlu ditingkatkan", "required": true },
+        "highestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian optimal/baik", "required": false },
+        "lowestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian perlu penguatan", "required": false },
+        "selectedOptimalTpIds": { "type": "array", "description": "Daftar ID TP yang dicentang optimal oleh guru per siswa", "required": false },
+        "selectedImprovementTpIds": { "type": "array", "description": "Daftar ID TP yang dicentang perlu pendampingan oleh guru per siswa", "required": false },
+        "manualFinalScore": { "type": "number", "description": "Nilai akhir rapor 0-100 yang diinput langsung guru", "required": false },
+        "learningObjectiveIds": { "type": "array", "description": "Daftar ID TP kontekstual yang dianalisis", "required": false },
+        "formativeAssessmentIds": { "type": "array", "description": "Daftar ID bukti formatif terkait", "required": false },
+        "summativeAssessmentIds": { "type": "array", "description": "Daftar ID bukti sumatif terkait", "required": false },
+        "achievedObjectives": { "type": "array", "description": "Ringkasan TP tercapai optimal/baik", "required": false },
+        "objectivesForImprovement": { "type": "array", "description": "Ringkasan TP yang perlu penguatan", "required": false },
+        "tpAnalysis": { "type": "array", "description": "Hasil analisis 4 status seluruh TP", "required": false },
+        "generatedDescription": { "type": "string", "description": "Hasil generate deskripsi otomatis awal", "required": false },
+        "finalDescription": { "type": "string", "description": "Deskripsi final tersimpan untuk rapor", "required": false },
+        "descriptionStatus": { "type": "string", "description": "Belum dibuat | Draft otomatis | Sudah diedit guru | Sudah disimpan | Sudah difinalisasi", "required": false },
+        "completenessWarning": { "type": "string", "description": "Peringatan kelengkapan bukti TP", "required": false },
         "notes": { "type": "string", "description": "Catatan tambahan guru", "required": false },
-        "updatedAt": { "type": "string", "description": "Timestamp terakhir nilai dihitung", "required": true }
+        "updatedAt": { "type": "string", "description": "Timestamp terakhir nilai dihitung", "required": true },
+        "updatedBy": { "type": "string", "description": "Nama pengguna terakhir yang memperbarui", "required": false },
+        "updatedById": { "type": "string", "description": "ID pengguna terakhir yang memperbarui", "required": false }
       },
       "rules": {
         "read": "isAdmin() || isOperator() || isKepalaSekolah() || (isWaliKelas() && resource.data.classId == userClassId()) || isGuru()",
-        "write": "isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId()) || isGuru()"
+        "write": "(isAdmin() || (isWaliKelas() && request.resource.data.classId == userClassId()) || isGuru()) && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester)"
+      }
+    },
+    "FormativeAssessment": {
+      "description": "Catatan asesmen formatif harian/per materi tertaut satu atau beberapa TP",
+      "collectionName": "formative_assessments",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik asesmen formatif", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "teacherId": { "type": "string", "description": "ID guru pengampu", "required": true },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
+        "tpId": { "type": "string", "description": "ID TP utama", "required": true },
+        "tpIds": { "type": "array", "description": "Daftar ID TP yang dinilai", "required": false },
+        "date": { "type": "string", "description": "Tanggal penilaian", "required": true },
+        "technique": { "type": "string", "description": "Teknik asesmen formatif", "required": true },
+        "masteryStatus": { "type": "string", "description": "Tercapai Optimal | Tercapai Baik | Perlu Penguatan", "required": false },
+        "score": { "type": "number", "description": "Skor diagnostik opsional (0-100)", "required": false },
+        "observation": { "type": "string", "description": "Catatan pengamatan guru", "required": false },
+        "feedback": { "type": "string", "description": "Umpan balik kepada siswa", "required": false },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Ganjil / Genap", "required": true },
+        "updatedAt": { "type": "string", "description": "Waktu pembaruan", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "(isAdmin() || isGuru() || isWaliKelas()) && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester)"
+      }
+    },
+    "SummativeAssessment": {
+      "description": "Penilaian sumatif lingkup materi tertaut satu atau beberapa TP",
+      "collectionName": "summative_assessments",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik asesmen sumatif", "required": true },
+        "studentId": { "type": "string", "description": "ID siswa", "required": true },
+        "teacherId": { "type": "string", "description": "ID guru pengampu", "required": true },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
+        "tpId": { "type": "string", "description": "ID TP utama", "required": true },
+        "tpIds": { "type": "array", "description": "Daftar ID TP yang diujikan", "required": false },
+        "assessmentTitle": { "type": "string", "description": "Judul penilaian sumatif (mis. UH 1)", "required": false },
+        "date": { "type": "string", "description": "Tanggal penilaian", "required": true },
+        "technique": { "type": "string", "description": "Teknik asesmen sumatif", "required": true },
+        "score": { "type": "number", "description": "Nilai sumatif (0-100)", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran", "required": true },
+        "semester": { "type": "string", "description": "Ganjil / Genap", "required": true },
+        "updatedAt": { "type": "string", "description": "Waktu pembaruan", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "(isAdmin() || isGuru() || isWaliKelas()) && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester)"
+      }
+    },
+    "KKTPConfig": {
+      "description": "Pengaturan Kriteria Ketercapaian Tujuan Pembelajaran (KKTP) per mapel dan TP",
+      "collectionName": "kktp_configs",
+      "fields": {
+        "id": { "type": "string", "description": "ID konfigurasi KKTP", "required": true },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "gradeLevel": { "type": "string", "description": "Tingkat kelas (7/8/9)", "required": true },
+        "tpId": { "type": "string", "description": "ID TP terkait", "required": true },
+        "criteria": { "type": "array", "description": "Daftar rentang kategori KKTP", "required": true },
+        "updatedAt": { "type": "string", "description": "Waktu pembaruan", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isGuru()"
+      }
+    },
+    "SubjectFinalScoreConfig": {
+      "description": "Konfigurasi metode pengolahan nilai akhir rapor per mapel dan rombel",
+      "collectionName": "final_score_configs",
+      "fields": {
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID rombel", "required": true },
+        "method": { "type": "string", "description": "rata-rata | pembobotan | persentase-tp", "required": true },
+        "tpWeights": { "type": "map", "description": "Bobot per TP opsional", "required": false },
+        "sasWeight": { "type": "number", "description": "Bobot SAS opsional", "required": false }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "isAdmin() || isGuru()"
       }
     },
     "Attendance": {
@@ -371,15 +472,25 @@
       }
     },
     "ApplicationSetting": {
-      "description": "Pengaturan sistem e-Rapor dan konfigurasi sinkronisasi cloud",
+      "description": "Pengaturan sistem e-Rapor, bank deskripsi, kebijakan & penguncian input periode, dan konfigurasi sinkronisasi cloud",
       "collectionName": "application_settings",
       "fields": {
-        "id": { "type": "string", "description": "ID konfigurasi", "required": true },
-        "autoBackupEnabled": { "type": "boolean", "description": "Apakah backup otomatis aktif", "required": true },
-        "backupIntervalDays": { "type": "number", "description": "Interval backup harian", "required": true },
+        "id": { "type": "string", "description": "ID konfigurasi (app_state, description_bank, assessment_policy, tombstones)", "required": false },
+        "autoBackupEnabled": { "type": "boolean", "description": "Apakah backup otomatis aktif", "required": false },
+        "backupIntervalDays": { "type": "number", "description": "Interval backup harian", "required": false },
         "lastBackupAt": { "type": "string", "description": "Waktu terakhir pencadangan", "required": false },
         "firebaseStorageBucket": { "type": "string", "description": "Nama bucket penyimpanan", "required": false },
-        "allowTeacherDirectEdit": { "type": "boolean", "description": "Izin edit guru", "required": true }
+        "allowTeacherDirectEdit": { "type": "boolean", "description": "Izin edit guru", "required": false },
+        "optimalMinScore": { "type": "number", "description": "Batas minimum TP dicapai optimal", "required": false },
+        "goodMinScore": { "type": "number", "description": "Batas minimum TP dicapai baik", "required": false },
+        "needStrengtheningBelow": { "type": "number", "description": "Batas nilai TP perlu penguatan", "required": false },
+        "minimumTpEvidenceCount": { "type": "number", "description": "Minimal jumlah TP dinilai", "required": false },
+        "usePerTpKktpIfConfigured": { "type": "boolean", "description": "Gunakan KKTP per TP bila tersedia", "required": false },
+        "formulaPolicyMode": { "type": "string", "description": "Mode kebijakan rumus nilai akhir", "required": false },
+        "includeFormativeInFinalScore": { "type": "boolean", "description": "Apakah formatif masuk bobot nilai akhir", "required": false },
+        "isInputLocked": { "type": "boolean", "description": "Kunci global input penilaian & deskripsi", "required": false },
+        "lockedPeriods": { "type": "map", "description": "Peta penguncian per tahunAjaran_semester", "required": false },
+        "items": { "type": "array", "description": "Item bank deskripsi per mata pelajaran", "required": false }
       },
       "rules": {
         "read": "isAuthenticated()",

@@ -1,43 +1,55 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  SummativeAssessment, 
-  KKTPConfig,
-  Student, 
-  Subject, 
-  LearningObjective, 
-  Classroom,
-  User,
-  TeachingAssignment,
+import React, { useState, useMemo } from 'react';
+import {
+  AssessmentPolicyConfig,
   AssessmentScore,
+  Classroom,
   FinalScoreMethod,
-  SubjectFinalScoreConfig
+  FormativeAssessment,
+  KKTPConfig,
+  LearningObjective,
+  Student,
+  Subject,
+  SubjectFinalScoreConfig,
+  SummativeAssessment,
+  TeachingAssignment,
+  User
 } from '../types/erapor';
-import { 
-  Calculator, 
-  TrendingUp, 
-  CheckCircle2, 
-  Save, 
-  Check, 
-  Info, 
-  AlertTriangle,
+import {
+  Calculator,
+  TrendingUp,
+  CheckCircle2,
+  Save,
+  Info,
   Settings,
-  ChevronRight,
-  BookOpen,
-  Users
+  Lock,
+  ArrowRight,
+  AlertTriangle
 } from 'lucide-react';
 import { getAccessibleClassrooms, getAccessibleStudents, calculatePredicate } from '../services/storage';
+import { SubjectDescriptionBank } from '../utils/descriptionBank';
+import {
+  analyzeStudentTPAttainment,
+  composeAutomaticCompetenceDescription,
+  filterObjectivesForContext,
+  getSummativeTpIds,
+  isPeriodInputLocked
+} from '../utils/tpAnalysisAndDescription';
 
 interface PengolahanNilaiAkhirViewProps {
   classrooms: Classroom[];
   students: Student[];
   subjects: Subject[];
   learningObjectives: LearningObjective[];
+  formativeAssessments?: FormativeAssessment[];
   summativeAssessments: SummativeAssessment[];
   kktpConfigs: KKTPConfig[];
   finalScoreConfigs: SubjectFinalScoreConfig[];
   scores: AssessmentScore[];
+  descriptionBank?: SubjectDescriptionBank[];
+  assessmentPolicy?: AssessmentPolicyConfig;
   onSaveScores: (scores: AssessmentScore[]) => void;
   onSaveConfig: (config: SubjectFinalScoreConfig) => void;
+  onNavigateToDescriptions?: () => void;
   currentUser: User;
   teachingAssignments: TeachingAssignment[];
   academicYear: string;
@@ -49,28 +61,39 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
   students,
   subjects,
   learningObjectives,
+  formativeAssessments = [],
   summativeAssessments,
   kktpConfigs,
   finalScoreConfigs,
   scores,
+  descriptionBank,
+  assessmentPolicy,
   onSaveScores,
   onSaveConfig,
+  onNavigateToDescriptions,
   currentUser,
   teachingAssignments,
   academicYear,
   semester
 }) => {
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
+  const isWaliKelasReadOnly = currentUser.role === 'walikelas';
+  const isLocked =
+    currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
+  const isReadOnly = isLocked || isWaliKelasReadOnly;
 
   // 1. Visible Classrooms & Subjects
-  const visibleClassrooms = useMemo(() => getAccessibleClassrooms(currentUser, classrooms), [currentUser, classrooms]);
+  const visibleClassrooms = useMemo(
+    () => getAccessibleClassrooms(currentUser, classrooms),
+    [currentUser, classrooms]
+  );
   const visibleSubjects = useMemo(() => {
-    if (isAdmin) return subjects;
+    if (isAdmin || isWaliKelasReadOnly) return subjects;
     const assignedIds = teachingAssignments
-      .filter(ta => ta.teacherId === currentUser.teacherId && ta.status === 'active')
-      .map(ta => ta.subjectId);
-    return subjects.filter(s => assignedIds.includes(s.id));
-  }, [subjects, teachingAssignments, currentUser, isAdmin]);
+      .filter((ta) => ta.teacherId === currentUser.teacherId && ta.status === 'active')
+      .map((ta) => ta.subjectId);
+    return subjects.filter((s) => assignedIds.includes(s.id));
+  }, [subjects, teachingAssignments, currentUser, isAdmin, isWaliKelasReadOnly]);
 
   // 2. Selection State
   const [selectedClassId, setSelectedClassId] = useState(visibleClassrooms[0]?.id || '');
@@ -78,155 +101,244 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
   const [showConfig, setShowConfig] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  const selectedClassroom = useMemo(
+    () => classrooms.find((c) => c.id === selectedClassId),
+    [classrooms, selectedClassId]
+  );
+
   const filteredStudents = useMemo(() => {
     return getAccessibleStudents(currentUser, students, selectedClassId);
   }, [currentUser, students, selectedClassId]);
 
   const relevantObjectives = useMemo(() => {
-    return learningObjectives.filter(tp => 
-      tp.subjectId === selectedSubjectId && tp.semester === semester
-    );
-  }, [learningObjectives, selectedSubjectId, semester]);
+    return filterObjectivesForContext(learningObjectives, {
+      subjectId: selectedSubjectId,
+      gradeLevel: selectedClassroom?.gradeLevel,
+      semester,
+      academicYear
+    });
+  }, [learningObjectives, selectedSubjectId, selectedClassroom?.gradeLevel, semester, academicYear]);
 
   const currentConfig = useMemo(() => {
-    return finalScoreConfigs.find(c => c.subjectId === selectedSubjectId && c.classId === selectedClassId) || {
-      subjectId: selectedSubjectId,
-      classId: selectedClassId,
-      method: 'rata-rata' as FinalScoreMethod,
-      sasWeight: 0
-    };
+    return (
+      finalScoreConfigs.find((c) => c.subjectId === selectedSubjectId && c.classId === selectedClassId) || {
+        subjectId: selectedSubjectId,
+        classId: selectedClassId,
+        method: 'rata-rata' as FinalScoreMethod,
+        sasWeight: 0
+      }
+    );
   }, [finalScoreConfigs, selectedSubjectId, selectedClassId]);
 
-  // 3. Calculation Logic
+  // 3. Calculation Logic (preserving school formulas + multi-TP + automated TP description)
   const computedData = useMemo(() => {
-    return filteredStudents.map(std => {
-      const studentSummative = summativeAssessments.filter(a => 
-        a.studentId === std.id && 
-        a.subjectId === selectedSubjectId && 
-        a.academicYear === academicYear && 
-        a.semester === semester
+    const subj = subjects.find((s) => s.id === selectedSubjectId);
+
+    return filteredStudents.map((std) => {
+      const existing = scores.find(
+        (s) =>
+          s.studentId === std.id &&
+          s.subjectId === selectedSubjectId &&
+          s.academicYear === academicYear &&
+          s.semester === semester
       );
 
-      // Group scores by TP
+      const studentSummative = summativeAssessments.filter(
+        (a) =>
+          a.studentId === std.id &&
+          a.subjectId === selectedSubjectId &&
+          a.academicYear === academicYear &&
+          a.semester === semester
+      );
+
+      // Group scores by all linked TPs
       const tpScores: Record<string, number[]> = {};
-      studentSummative.forEach(a => {
-        if (!tpScores[a.tpId]) tpScores[a.tpId] = [];
-        tpScores[a.tpId].push(a.score);
+      studentSummative.forEach((a) => {
+        getSummativeTpIds(a).forEach((tpId) => {
+          if (!tpScores[tpId]) tpScores[tpId] = [];
+          tpScores[tpId].push(a.score);
+        });
       });
 
-      // Calculate average per TP
+      // Calculate average per TP (never coerce missing to 0)
       const tpAverages: Record<string, number> = {};
-      relevantObjectives.forEach(tp => {
+      relevantObjectives.forEach((tp) => {
         const vals = tpScores[tp.id] || [];
         if (vals.length > 0) {
           tpAverages[tp.id] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+        } else if (typeof existing?.sumatifMateriScores?.[tp.id] === 'number') {
+          tpAverages[tp.id] = existing.sumatifMateriScores[tp.id];
         }
       });
 
-      // Calculate Final Score based on method
-      let finalScore = 0;
       const avgs = Object.values(tpAverages);
-      
+      let finalScore: number | undefined;
+
       if (avgs.length > 0) {
         if (currentConfig.method === 'rata-rata') {
           finalScore = Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length);
         } else if (currentConfig.method === 'pembobotan' && currentConfig.tpWeights) {
           let weightedSum = 0;
           let totalWeight = 0;
-          relevantObjectives.forEach(tp => {
+          relevantObjectives.forEach((tp) => {
             if (tpAverages[tp.id] !== undefined) {
               const weight = currentConfig.tpWeights?.[tp.id] || 1;
               weightedSum += tpAverages[tp.id] * weight;
               totalWeight += weight;
             }
           });
-          finalScore = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
-        } else if (currentConfig.method === 'persentase-tp') {
-          // Simplistic implementation: % of TPs that reached KKTP
-          const kktps = kktpConfigs.filter(k => k.subjectId === selectedSubjectId);
-          let reachedCount = 0;
-          relevantObjectives.forEach(tp => {
-            const avg = tpAverages[tp.id];
-            if (avg !== undefined) {
-              const kktp = kktps.find(k => k.tpId === tp.id);
-              const minPass = kktp?.criteria.find(c => c.category === 'Cukup')?.minScore || 65;
-              if (avg >= minPass) reachedCount++;
-            }
-          });
-          // This method usually maps % reached to a score scale or just uses average if reached.
-          // For now, fallback to average for calculation, but flag status.
+          finalScore = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : undefined;
+        } else {
           finalScore = Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length);
         }
+      } else if (existing && typeof existing.finalScore === 'number' && existing.sumatifAkhirSemester > 0) {
+        finalScore = existing.finalScore;
       }
 
-      // Determine Descriptions based on KKTP
-      let highestDesc = '';
-      let lowestDesc = '';
-      
-      if (avgs.length > 0) {
-        const sortedAvgs = relevantObjectives
-          .filter(tp => tpAverages[tp.id] !== undefined)
-          .map(tp => ({ tp, avg: tpAverages[tp.id] }))
-          .sort((a, b) => b.avg - a.avg);
+      // If SAS exists on score record and method has sasWeight or existing SAS was filled manually
+      const effectiveFinalScore = finalScore ?? existing?.finalScore;
 
-        const high = sortedAvgs[0];
-        const low = sortedAvgs[sortedAvgs.length - 1];
+      const analysis = analyzeStudentTPAttainment({
+        studentId: std.id,
+        subjectId: selectedSubjectId,
+        classId: selectedClassId,
+        gradeLevel: selectedClassroom?.gradeLevel,
+        academicYear,
+        semester,
+        learningObjectives,
+        formativeAssessments,
+        summativeAssessments,
+        existingScore: existing
+          ? { ...existing, sumatifMateriScores: { ...existing.sumatifMateriScores, ...tpAverages } }
+          : avgs.length > 0
+          ? ({ sumatifMateriScores: tpAverages, formatifScores: {} } as AssessmentScore)
+          : undefined,
+        kktpConfigs,
+        policy: assessmentPolicy
+      });
 
-        const getDesc = (tpId: string, score: number) => {
-          const config = kktpConfigs.find(k => k.tpId === tpId);
-          if (!config) return score >= 75 ? 'Menunjukkan penguasaan materi dengan baik.' : 'Perlu bimbingan lebih lanjut.';
-          const criterion = [...config.criteria].sort((a, b) => b.minScore - a.minScore).find(c => score >= c.minScore);
-          return criterion ? criterion.description : config.criteria[0].description;
-        };
-
-        highestDesc = `Menunjukkan penguasaan yang baik dalam ${high.tp.description.toLowerCase()}. ${getDesc(high.tp.id, high.avg)}`;
-        lowestDesc = low.avg < 75 
-          ? `Perlu bimbingan dalam ${low.tp.description.toLowerCase()}. ${getDesc(low.tp.id, low.avg)}`
-          : `Sudah mencapai kriteria dalam ${low.tp.description.toLowerCase()}, namun disarankan untuk terus berlatih.`;
-      }
+      const composed = composeAutomaticCompetenceDescription({
+        student: std,
+        subject: subj,
+        subjectId: selectedSubjectId,
+        classroom: selectedClassroom,
+        academicYear,
+        semester,
+        finalScore: effectiveFinalScore,
+        analysis,
+        descriptionBank,
+        policy: assessmentPolicy
+      });
 
       return {
         student: std,
+        existing,
         tpAverages,
-        finalScore,
-        highestDesc,
-        lowestDesc,
-        predicate: calculatePredicate(finalScore)
+        hasAnyScore: avgs.length > 0 || Boolean(existing),
+        finalScore: effectiveFinalScore,
+        analysis,
+        composed,
+        predicate: effectiveFinalScore !== undefined ? calculatePredicate(effectiveFinalScore) : undefined
       };
     });
-  }, [filteredStudents, summativeAssessments, relevantObjectives, currentConfig, kktpConfigs, selectedSubjectId, academicYear, semester]);
+  }, [
+    filteredStudents,
+    subjects,
+    selectedSubjectId,
+    selectedClassId,
+    selectedClassroom,
+    academicYear,
+    semester,
+    scores,
+    summativeAssessments,
+    relevantObjectives,
+    currentConfig,
+    learningObjectives,
+    formativeAssessments,
+    kktpConfigs,
+    assessmentPolicy,
+    descriptionBank
+  ]);
 
-  const handleSaveAll = () => {
-    const newScores: AssessmentScore[] = computedData.map(item => {
-      const existing = scores.find(s => 
-        s.studentId === item.student.id && 
-        s.subjectId === selectedSubjectId && 
-        s.academicYear === academicYear && 
-        s.semester === semester
-      );
+  const executeSaveAll = () => {
+    if (isReadOnly) return;
+    const nowIso = new Date().toISOString();
 
-      return {
-        id: existing?.id || `sc-${Date.now()}-${item.student.id}`,
-        studentId: item.student.id,
-        subjectId: selectedSubjectId,
-        classId: selectedClassId,
-        academicYear,
-        semester,
-        formatifScores: {}, // We use separate collection now
-        sumatifMateriScores: item.tpAverages,
-        sumatifAkhirSemester: existing?.sumatifAkhirSemester || 0,
-        finalScore: item.finalScore,
-        predicate: item.predicate,
-        highestCompetenceDesc: item.highestDesc,
-        lowestCompetenceDesc: item.lowestDesc,
-        updatedAt: new Date().toISOString(),
-        status: 'SELESAI'
-      };
-    });
+    const newScores: AssessmentScore[] = computedData
+      .filter((item) => item.hasAnyScore)
+      .map((item) => {
+        const existing = item.existing;
+        const isProtected =
+          existing &&
+          (existing.descriptionStatus === 'Sudah diedit guru' ||
+            existing.descriptionStatus === 'Sudah disimpan' ||
+            existing.descriptionStatus === 'Sudah difinalisasi');
+        const keepExistingDesc = Boolean(
+          existing &&
+            (isProtected ||
+              Boolean((existing.finalDescription || existing.highestCompetenceDesc || '').trim()))
+        );
 
-    onSaveScores(newScores);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+        const nextHighest = keepExistingDesc ? existing!.highestCompetenceDesc : '';
+        const nextLowest = keepExistingDesc ? existing!.lowestCompetenceDesc : '';
+        const nextGenDesc = keepExistingDesc
+          ? existing!.generatedDescription || existing!.finalDescription || ''
+          : '';
+        const nextFinalDesc = keepExistingDesc
+          ? existing!.finalDescription || nextGenDesc
+          : '';
+        const nextDescStatus = keepExistingDesc
+          ? existing!.descriptionStatus
+          : ('Belum dibuat' as const);
+
+        return {
+          id: existing?.id || `sc-${item.student.id}-${selectedSubjectId}-${academicYear.replace(/\//g, '_')}-${semester}`,
+          studentId: item.student.id,
+          studentName: item.student.name,
+          subjectId: selectedSubjectId,
+          subjectName: subjects.find((s) => s.id === selectedSubjectId)?.name || '',
+          classId: selectedClassId,
+          className: selectedClassroom?.name || '',
+          academicYear,
+          semester,
+          formatifScores: existing?.formatifScores || {},
+          sumatifMateriScores: item.tpAverages,
+          sumatifAkhirSemester: existing?.sumatifAkhirSemester || 0,
+          finalScore: item.finalScore ?? 0,
+          predicate: item.predicate || 'D',
+          selectedOptimalTpIds: existing?.selectedOptimalTpIds || [],
+          selectedImprovementTpIds: existing?.selectedImprovementTpIds || [],
+          highestCompetenceDesc: nextHighest,
+          lowestCompetenceDesc: nextLowest,
+          learningObjectiveIds: item.analysis.matchedTpIds,
+          formativeAssessmentIds: item.analysis.matchedFormativeIds,
+          summativeAssessmentIds: item.analysis.matchedSummativeIds,
+          achievedObjectives: existing?.achievedObjectives || [],
+          objectivesForImprovement: existing?.objectivesForImprovement || [],
+          tpAnalysis: item.analysis.tpSummaries,
+          generatedDescription: nextGenDesc,
+          finalDescription: nextFinalDesc,
+          descriptionStatus: nextDescStatus,
+          completenessWarning: keepExistingDesc
+            ? existing?.completenessWarning
+            : 'Silakan periksa dan centang checklist TP Optimal / Perlu Pendampingan di menu Deskripsi / Input Nilai.',
+          updatedAt: nowIso,
+          updatedBy: currentUser.name,
+          updatedById: currentUser.id,
+          status: 'SELESAI'
+        };
+      });
+
+    if (newScores.length > 0) {
+      onSaveScores(newScores);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    }
+  };
+
+  const handleSaveAllClick = () => {
+    if (isReadOnly) return;
+    executeSaveAll();
   };
 
   return (
@@ -239,22 +351,43 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
             Pengolahan Nilai Akhir
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Kalkulasi nilai rapor berdasarkan akumulasi asesmen sumatif dan konfigurasi KKTP.
+            Kalkulasi nilai akhir rapor berdasarkan asesmen sumatif, serta analisis ketercapaian TP formatif-sumatif untuk sinkronisasi deskripsi rapor.
           </p>
         </div>
 
-        <button
-          onClick={() => setShowConfig(!showConfig)}
-          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-2 transition"
-        >
-          <Settings className="w-3.5 h-3.5" />
-          Metode Perhitungan
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onNavigateToDescriptions && (
+            <button
+              onClick={onNavigateToDescriptions}
+              className="px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold text-xs flex items-center gap-1.5 transition"
+            >
+              Kelola Deskripsi Rapor Otomatis
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={() => setShowConfig(!showConfig)}
+            disabled={isReadOnly}
+            className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs flex items-center gap-2 transition"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            Metode Perhitungan
+          </button>
+        </div>
       </div>
+
+      {isLocked && (
+        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2.5">
+          <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+          <span>
+            <strong>Periode Terkunci ({academicYear} {semester}):</strong> Perubahan metode atau posting nilai dikunci sementara oleh Administrator.
+          </span>
+        </div>
+      )}
 
       {/* Filter & Config Bar */}
       <div className="space-y-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1">Rombel</label>
             <select
@@ -262,15 +395,23 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
               onChange={(e) => setSelectedClassId(e.target.value)}
               className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 outline-none bg-white"
             >
-              {visibleClassrooms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {visibleClassrooms.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
             </select>
           </div>
           <div className="md:col-span-2">
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1 text-indigo-600">Mata Pelajaran</label>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1 text-indigo-600">
+              Mata Pelajaran
+            </label>
             {visibleSubjects.length === 0 ? (
               <div className="flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-700">
                 <Info className="w-3.5 h-3.5" />
-                <span>Anda belum memiliki penugasan mengajar aktif di menu <strong>9. Penugasan Guru Mengajar</strong>.</span>
+                <span>
+                  Anda belum memiliki penugasan mengajar aktif di menu <strong>9. Penugasan Guru Mengajar</strong>.
+                </span>
               </div>
             ) : (
               <select
@@ -278,13 +419,17 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                 onChange={(e) => setSelectedSubjectId(e.target.value)}
                 className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 outline-none bg-white font-bold"
               >
-                {visibleSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {visibleSubjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
               </select>
             )}
           </div>
         </div>
 
-        {showConfig && (
+        {showConfig && !isReadOnly && (
           <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100 animate-in slide-in-from-top-2 duration-300">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2 bg-white rounded-lg text-indigo-600 shadow-sm">
@@ -292,16 +437,19 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
               </div>
               <h3 className="text-sm font-bold text-indigo-900 font-display">Konfigurasi Pengolahan Nilai</h3>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
                 <label className="block text-[11px] font-bold text-indigo-700 uppercase mb-2">Metode Kalkulasi</label>
                 <div className="space-y-2">
-                  {(['rata-rata', 'pembobotan', 'persentase-tp'] as FinalScoreMethod[]).map(m => (
-                    <label key={m} className="flex items-center gap-2 p-2 rounded-lg bg-white/50 border border-indigo-200 cursor-pointer hover:bg-white transition">
-                      <input 
-                        type="radio" 
-                        name="method" 
+                  {(['rata-rata', 'pembobotan', 'persentase-tp'] as FinalScoreMethod[]).map((m) => (
+                    <label
+                      key={m}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-white/50 border border-indigo-200 cursor-pointer hover:bg-white transition"
+                    >
+                      <input
+                        type="radio"
+                        name="method"
                         checked={currentConfig.method === m}
                         onChange={() => onSaveConfig({ ...currentConfig, method: m })}
                         className="text-indigo-600 focus:ring-indigo-500"
@@ -315,12 +463,14 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
               <div className="md:col-span-2">
                 {currentConfig.method === 'pembobotan' ? (
                   <div className="p-4 bg-white/60 rounded-xl border border-indigo-200">
-                    <h4 className="text-[11px] font-bold text-indigo-800 uppercase mb-3">Atur Bobot Per Tujuan Pembelajaran</h4>
+                    <h4 className="text-[11px] font-bold text-indigo-800 uppercase mb-3">
+                      Atur Bobot Per Tujuan Pembelajaran
+                    </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {relevantObjectives.map(tp => (
+                      {relevantObjectives.map((tp) => (
                         <div key={tp.id} className="flex items-center gap-2">
                           <span className="text-[10px] font-bold text-slate-500 w-16">{tp.code}:</span>
-                          <input 
+                          <input
                             type="number"
                             min="1"
                             max="100"
@@ -342,11 +492,17 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                     <div className="flex items-start gap-3">
                       <Info className="w-5 h-5 text-indigo-500 shrink-0" />
                       <div className="text-[11px] text-indigo-800 leading-relaxed">
-                        <span className="font-bold block mb-1">Keterangan Metode:</span>
+                        <span className="font-bold block mb-1">Keterangan Metode Resmi:</span>
                         <ul className="list-disc ml-4 space-y-1">
-                          <li><strong>Rata-rata:</strong> Nilai akhir diambil dari rerata seluruh nilai sumatif TP.</li>
-                          <li><strong>Pembobotan:</strong> Guru memberikan bobot berbeda untuk setiap TP (misal: TP yang lebih sulit memiliki bobot lebih tinggi).</li>
-                          <li><strong>Persentase TP:</strong> Berfokus pada jumlah TP yang tuntas mencapai KKTP.</li>
+                          <li>
+                            <strong>Rata-rata:</strong> Nilai akhir dihitung dari rerata sumatif TP yang sudah memiliki nilai (data kosong tidak dianggap nol).
+                          </li>
+                          <li>
+                            <strong>Pembobotan:</strong> Guru mengatur bobot tiap TP secara proporsional.
+                          </li>
+                          <li>
+                            <strong>Asesmen Formatif:</strong> Digunakan untuk bukti ketercapaian TP dan penyusunan deskripsi rapor tanpa mengubah bobot nilai angka kecuali disetujui sekolah.
+                          </li>
                         </ul>
                       </div>
                     </div>
@@ -365,8 +521,8 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
             <thead>
               <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
                 <th className="px-4 py-3 text-[10px] font-bold w-10 text-center">NO</th>
-                <th className="px-4 py-3 text-[10px] font-bold min-w-[200px]">NAMA SISWA</th>
-                {relevantObjectives.map(tp => (
+                <th className="px-4 py-3 text-[10px] font-bold min-w-[180px]">NAMA SISWA</th>
+                {relevantObjectives.map((tp) => (
                   <th key={tp.id} className="px-3 py-3 text-[10px] font-bold text-center border-l border-slate-100">
                     <div className="flex flex-col items-center">
                       <span className="text-blue-600">{tp.code}</span>
@@ -374,8 +530,13 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                     </div>
                   </th>
                 ))}
-                <th className="px-4 py-3 text-[10px] font-bold text-center bg-indigo-50/50 border-l border-slate-200">NILAI AKHIR</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-center bg-indigo-50/50 border-l border-slate-200">
+                  NILAI AKHIR
+                </th>
                 <th className="px-4 py-3 text-[10px] font-bold text-center bg-indigo-50/50">PREDIKAT</th>
+                <th className="px-4 py-3 text-[10px] font-bold border-l border-slate-200 min-w-[220px]">
+                  RINGKASAN KETERCAPAIAN TP
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -386,7 +547,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                     <div className="font-bold text-slate-800 text-xs uppercase">{item.student.name}</div>
                     <div className="text-[9px] text-slate-400 font-mono">NISN: {item.student.nisn}</div>
                   </td>
-                  {relevantObjectives.map(tp => {
+                  {relevantObjectives.map((tp) => {
                     const avg = item.tpAverages[tp.id];
                     return (
                       <td key={tp.id} className="px-3 py-3 text-center border-l border-slate-50">
@@ -399,17 +560,48 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                     );
                   })}
                   <td className="px-4 py-3 text-center bg-indigo-50/20 border-l border-slate-100">
-                    <div className="text-sm font-black text-indigo-700">{item.finalScore}</div>
+                    {item.finalScore !== undefined ? (
+                      <div className="text-sm font-black text-indigo-700">{item.finalScore}</div>
+                    ) : (
+                      <div className="text-[10px] text-slate-400 italic">Belum dinilai</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center bg-indigo-50/20">
-                    <span className={`inline-block w-8 py-1 rounded-lg text-[11px] font-black ${
-                      item.predicate === 'A' ? 'bg-emerald-100 text-emerald-700' :
-                      item.predicate === 'B' ? 'bg-blue-100 text-blue-700' :
-                      item.predicate === 'C' ? 'bg-amber-100 text-amber-700' :
-                      'bg-rose-100 text-rose-700'
-                    }`}>
-                      {item.predicate}
-                    </span>
+                    {item.predicate ? (
+                      <span
+                        className={`inline-block w-8 py-1 rounded-lg text-[11px] font-black ${
+                          item.predicate === 'A'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : item.predicate === 'B'
+                            ? 'bg-blue-100 text-blue-700'
+                            : item.predicate === 'C'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-rose-100 text-rose-700'
+                        }`}
+                      >
+                        {item.predicate}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-300">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 border-l border-slate-100 text-[11px] space-y-1">
+                    <div className="flex flex-wrap gap-1">
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[10px]">
+                        Optimal: {item.analysis.optimalTPs.length}
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold text-[10px]">
+                        Baik: {item.analysis.goodTPs.length}
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-semibold text-[10px]">
+                        Penguatan: {item.analysis.improvementTPs.length}
+                      </span>
+                    </div>
+                    {item.composed.canGenerate ? (
+                      <p className="text-slate-600 line-clamp-2">{item.composed.generatedDescription}</p>
+                    ) : (
+                      <p className="text-amber-700 italic">Bukti TP belum lengkap untuk deskripsi.</p>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -426,25 +618,29 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           </div>
           <div className="space-y-1">
             <h4 className="text-white font-bold text-sm">Siap Posting Nilai ke Rapor?</h4>
-            <p className="text-slate-400 text-[11px] leading-relaxed max-w-md">
-              Nilai dihitung secara otomatis dari Asesmen Sumatif (menu 14) dan kini otomatis tersinkron ke menu 17 Input Nilai Siswa. Klik tombol ini untuk mengunci nilai akhir serta rumusan deskripsi capaian kompetensi ke Rapor & Leger.
+            <p className="text-slate-400 text-[11px] leading-relaxed max-w-lg">
+              Nilai dihitung sesuai kebijakan sekolah dari Asesmen Sumatif, sekaligus menganalisis ketercapaian TP formatif-sumatif untuk menyusun draft deskripsi rapor tanpa menimpa deskripsi yang sudah Anda edit manual.
             </p>
           </div>
         </div>
 
         <button
-          onClick={handleSaveAll}
-          disabled={saveSuccess || computedData.length === 0}
-          className={`w-full md:w-auto px-10 py-4 rounded-xl font-black text-sm flex items-center justify-center gap-3 transition-all shadow-2xl active:scale-95 ${
-            saveSuccess 
-              ? 'bg-emerald-500 text-white' 
+          onClick={handleSaveAllClick}
+          disabled={isReadOnly || saveSuccess || computedData.filter((i) => i.hasAnyScore).length === 0}
+          className={`w-full md:w-auto px-10 py-4 rounded-xl font-black text-sm flex items-center justify-center gap-3 transition-all shadow-2xl active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+            saveSuccess
+              ? 'bg-emerald-500 text-white'
               : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-500/20'
           }`}
         >
           {saveSuccess ? (
-            <><CheckCircle2 className="w-5 h-5" /> Berhasil Diposting</>
+            <>
+              <CheckCircle2 className="w-5 h-5" /> Berhasil Diposting
+            </>
           ) : (
-            <><Save className="w-5 h-5" /> Posting Nilai ke Rapor</>
+            <>
+              <Save className="w-5 h-5" /> Posting Nilai ke Rapor
+            </>
           )}
         </button>
       </div>

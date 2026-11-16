@@ -20,6 +20,7 @@ import {
 import { getTutWuriHandayaniDataUrl } from '../components/common/TutWuriHandayaniLogo';
 import { sortSubjects } from '../utils/subjectSort';
 import { getSubdimensionMap } from '../utils/kokurikulerHelper';
+import { resolveRaporCompetenceDisplay } from '../utils/tpAnalysisAndDescription';
 
 export interface ReportCardExportOptions {
   school: SchoolProfile;
@@ -383,13 +384,8 @@ export const buildReportContentPages = (
   const tableRows = sortedSubjects.map((sub, idx) => {
     const sc = scoreLookup.get(sub.id);
     const finalVal = sc?.finalScore !== undefined ? String(sc.finalScore) : '-';
-    let competenceText = '';
-    if (sc) {
-      competenceText = `${sc.highestCompetenceDesc || ''}\n${sc.lowestCompetenceDesc || ''}`.trim();
-      if (!competenceText) competenceText = 'Mencapai kriteria ketercapaian tujuan pembelajaran dengan baik.';
-    } else {
-      competenceText = 'Nilai belum diinput oleh guru mata pelajaran.';
-    }
+    const competenceDisplay = resolveRaporCompetenceDisplay(sc);
+    const competenceText = competenceDisplay.parts.join('\n');
 
     return [
       idx + 1,
