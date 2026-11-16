@@ -19,6 +19,7 @@ import { exportStudentsToExcel } from '../services/excelService';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms, parseClassroomRank } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { normalizeDateToIso } from '../utils/dateFormat';
 
 interface DataSiswaViewProps {
   students: Student[];
@@ -46,6 +47,8 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
   );
   const [filterGender, setFilterGender] = useState<string>('all');
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [originalRawDob, setOriginalRawDob] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
@@ -119,11 +122,16 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
       classId: classrooms[0]?.id || 'cls-vii-1',
       status: 'Aktif'
     });
+    setOriginalRawDob('');
+    setIsEditMode(false);
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (s: Student) => {
-    setEditingStudent({ ...s });
+    const normalizedDob = normalizeDateToIso(s.dob);
+    setOriginalRawDob(s.dob || '');
+    setEditingStudent({ ...s, dob: normalizedDob });
+    setIsEditMode(true);
     setIsModalOpen(true);
   };
 
@@ -133,6 +141,8 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
       onSaveStudent(editingStudent);
       setIsModalOpen(false);
       setEditingStudent(null);
+      setIsEditMode(false);
+      setOriginalRawDob('');
     }
   };
 
@@ -290,7 +300,11 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       <div>{std.pob}</div>
-                      <div className="text-[10px] text-slate-400">{std.dob}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {/^\d{4,5}(?:\.\d+)?$/.test((std.dob || '').trim())
+                          ? normalizeDateToIso(std.dob) || std.dob
+                          : std.dob}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[11px] border border-blue-200">
@@ -367,9 +381,7 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl border border-slate-200 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-bold text-base text-slate-900">
-                {editingStudent.id.startsWith('std-7') || editingStudent.id.startsWith('std-8') || editingStudent.id.startsWith('std-9')
-                  ? 'Edit Data Peserta Didik'
-                  : 'Tambah Peserta Didik Baru'}
+                {isEditMode ? 'Edit Data Peserta Didik' : 'Tambah Peserta Didik Baru'}
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -461,11 +473,16 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                   <label className="block font-semibold text-slate-700 mb-1">Tanggal Lahir</label>
                   <input
                     type="date"
-                    value={editingStudent.dob}
+                    value={editingStudent.dob || ''}
                     onChange={(e) => setEditingStudent({ ...editingStudent, dob: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
                     required
                   />
+                  {!editingStudent.dob && originalRawDob && (
+                    <p className="mt-1 text-[10px] text-amber-700">
+                      Format sebelumnya ({originalRawDob}) belum standar. Silakan pilih ulang tanggal lahir.
+                    </p>
+                  )}
                 </div>
 
                 <div>

@@ -19,6 +19,7 @@ import {
   mapLevelToNumericCode,
   mapNumericCodeToLevel
 } from '../utils/kokurikulerHelper';
+import { normalizeDateToIso } from '../utils/dateFormat';
 
 // 1. Export Students to Excel
 export const exportStudentsToExcel = (
@@ -172,7 +173,14 @@ export const parseStudentExcelFile = async (file: File, classrooms: Classroom[])
             name: name,
             gender: jk === 'P' ? 'P' : 'L',
             pob: String(row.TEMPAT_LAHIR || row.tempat_lahir || 'Tanjung Samak'),
-            dob: String(row.TANGGAL_LAHIR || row.tanggal_lahir || '2011-01-01'),
+            dob:
+              normalizeDateToIso(
+                row.TANGGAL_LAHIR ??
+                  row.tanggal_lahir ??
+                  row['Tanggal Lahir'] ??
+                  row.TGL_LAHIR ??
+                  row.tgl_lahir
+              ) || '2011-01-01',
             religion: (row.AGAMA || 'Islam') as any,
             address: String(row.ALAMAT || row.alamat || 'Kecamatan Rangsang'),
             fatherName: String(row.NAMA_AYAH || row.ayah || '-'),
