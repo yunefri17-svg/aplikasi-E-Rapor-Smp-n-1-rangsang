@@ -81,8 +81,9 @@ export const initialSubjects: Subject[] = [
   { id: 'sub-bing', code: 'BING', name: 'Bahasa Inggris', category: 'A', orderIndex: 7, kkm: 75 },
   { id: 'sub-pjok', code: 'PJOK', name: 'Pendidikan Jasmani, Olahraga, dan Kesehatan', category: 'B', orderIndex: 8, kkm: 75 },
   { id: 'sub-inf', code: 'INF', name: 'Informatika', category: 'B', orderIndex: 9, kkm: 75 },
-  { id: 'sub-seni', code: 'SENI', name: 'Seni Budaya & Prakarya', category: 'B', orderIndex: 10, kkm: 75 },
-  { id: 'sub-bmr', code: 'BMR', name: 'Muatan Lokal Budaya Melayu Riau (BMR)', category: 'Muatan Lokal', orderIndex: 11, kkm: 75 }
+  { id: 'sub-ka', code: 'KKA', name: 'Koding dan Kecerdasan Artifisial', category: 'Pilihan', isElective: true, excludedFromOfficialTranscript: true, orderIndex: 10, kkm: 75 },
+  { id: 'sub-seni', code: 'SENI', name: 'Seni Budaya & Prakarya', category: 'B', orderIndex: 11, kkm: 75 },
+  { id: 'sub-bmr', code: 'BMR', name: 'Muatan Lokal Budaya Melayu Riau (BMR)', category: 'Muatan Lokal', orderIndex: 12, kkm: 75 }
 ];
 
 export const initialTeachers: Teacher[] = [
@@ -710,7 +711,13 @@ export const initialLearningObjectives: LearningObjective[] = [
   // Kelas 9
   { id: 'tp-bindo-9.1', curriculumId: 'cur-merdeka', subjectId: 'sub-bindo', gradeLevel: '9', code: 'TP 9.1', description: 'Menyimpulkan isi dan struktur teks laporan percobaan ilmiah', semester: 'Ganjil' },
   { id: 'tp-mat-9.1', curriculumId: 'cur-merdeka', subjectId: 'sub-mat', gradeLevel: '9', code: 'TP 9.1', description: 'Menerapkan konsep perpangkatan dan bentuk akar dalam penyelesaian masalah', semester: 'Ganjil' },
-  { id: 'tp-ipa-9.1', curriculumId: 'cur-merdeka', subjectId: 'sub-ipa', gradeLevel: '9', code: 'TP 9.1', description: 'Menghubungkan sistem reproduksi manusia dengan gangguan dan kelainan', semester: 'Ganjil' }
+  { id: 'tp-ipa-9.1', curriculumId: 'cur-merdeka', subjectId: 'sub-ipa', gradeLevel: '9', code: 'TP 9.1', description: 'Menghubungkan sistem reproduksi manusia dengan gangguan dan kelainan', semester: 'Ganjil' },
+
+  // Koding dan Kecerdasan Artifisial (Mata Pelajaran Pilihan Fase D)
+  { id: 'tp-ka-7.1', curriculumId: 'cur-merdeka', subjectId: 'sub-ka', gradeLevel: '7', code: 'TP 7.1', materi: 'Algoritma & Pemrograman Dasar', description: 'Menyusun algoritma berurutan, percabangan, dan perulangan dalam pemrograman visual atau teks sederhana', semester: 'Ganjil' },
+  { id: 'tp-ka-7.2', curriculumId: 'cur-merdeka', subjectId: 'sub-ka', gradeLevel: '7', code: 'TP 7.2', materi: 'Literasi & Etika Kecerdasan Artifisial', description: 'Memahami konsep dasar Kecerdasan Artifisial serta menerapkannya secara kritis, jujur, dan bertanggung jawab', semester: 'Ganjil' },
+  { id: 'tp-ka-8.1', curriculumId: 'cur-merdeka', subjectId: 'sub-ka', gradeLevel: '8', code: 'TP 8.1', materi: 'Logika Pemrograman & Pengolahan Data', description: 'Merancang program interaktif berbasis data sederhana dan menguji ketepatan logika komputasionalnya', semester: 'Ganjil' },
+  { id: 'tp-ka-9.1', curriculumId: 'cur-merdeka', subjectId: 'sub-ka', gradeLevel: '9', code: 'TP 9.1', materi: 'Proyek Koding & Aplikasi AI', description: 'Mengembangkan proyek solusi digital berbasis koding dan pemanfaatan Kecerdasan Artifisial yang etis', semester: 'Ganjil' }
 ];
 
 export const initialExtracurriculars: Extracurricular[] = [

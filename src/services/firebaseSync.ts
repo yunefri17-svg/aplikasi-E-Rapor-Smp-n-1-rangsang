@@ -582,7 +582,9 @@ export async function syncAllToFirestore(
       reportOps.push({ ref: doc(db, 'extracurriculars', sanitizeDocId(e.id)), data: e });
     });
     dbData.studentExtracurriculars.forEach((se) => {
-      reportOps.push({ ref: doc(db, 'student_extracurriculars', sanitizeDocId(se.id)), data: se });
+      if (!isEntityDeleted('student_extracurriculars', se.id)) {
+        reportOps.push({ ref: doc(db, 'student_extracurriculars', sanitizeDocId(se.id)), data: se });
+      }
     });
     dbData.users.forEach((u) => {
       if (!isEntityDeleted('users', u.id)) {

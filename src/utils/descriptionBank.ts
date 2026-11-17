@@ -395,6 +395,47 @@ export const defaultDescriptionBank: SubjectDescriptionBank[] = [
     tpPatterns: []
   },
   {
+    subjectId: 'sub-ka',
+    subjectName: 'Koding dan Kecerdasan Artifisial',
+    ranges: [
+      {
+        range: '95-100',
+        highestDesc: 'Menunjukkan penguasaan yang sangat istimewa dalam merancang algoritma pemrograman terstruktur, logika komputasional, serta pemodelan dan etika pemanfaatan Kecerdasan Artifisial.',
+        lowestDesc: 'Sangat terampil mengimplementasikan proyek koding interaktif, analisis pola data, dan validasi keluaran AI secara kritis dan bertanggung jawab.'
+      },
+      {
+        range: '90-94',
+        highestDesc: 'Menunjukkan pemahaman yang sangat baik dalam menyusun instruksi pemrograman (algoritma, percabangan, perulangan) serta memahami cara kerja sistem Kecerdasan Artifisial.',
+        lowestDesc: 'Mampu menguji program sederhana dan memanfaatkan perangkat AI secara etis serta produktif.'
+      },
+      {
+        range: '85-89',
+        highestDesc: 'Menunjukkan kemampuan yang baik dalam menerjemahkan logika pemecahan masalah ke dalam blok atau baris kode serta mengenali prinsip dasar Kecerdasan Artifisial.',
+        lowestDesc: 'Perlu peningkatan ketelitian dalam penelusuran kesalahan program (debugging) dan pengujian kasus uji.'
+      },
+      {
+        range: '80-84',
+        highestDesc: 'Mampu memahami konsep dasar koding, urutan algoritma sederhana, dan pemanfaatan bijak teknologi Kecerdasan Artifisial sesuai standar ketuntasan.',
+        lowestDesc: 'Perlu penguatan praktik menyusun struktur percabangan dan pengulangan dalam proyek koding.'
+      },
+      {
+        range: '75-79',
+        highestDesc: 'Menunjukkan ketuntasan belajar yang memadai dalam pengenalan algoritma koding dan konsep dasar Kecerdasan Artifisial.',
+        lowestDesc: 'Perlu latihan terarah dalam menyusun alur logika program dan mengevaluasi informasi hasil AI.'
+      },
+      {
+        range: 'below-75',
+        highestDesc: 'Mencapai batas ketuntasan minimum dengan pendampingan pada materi dasar.',
+        lowestDesc: 'Perlu bimbingan intensif dalam memahami logika urutan algoritma, dasar pemrograman, dan etika Kecerdasan Artifisial.'
+      }
+    ],
+    optimalTemplate: 'Menunjukkan penguasaan yang sangat baik dan optimal pada Koding dan Kecerdasan Artifisial dalam {tps}.',
+    goodTemplate: 'Menunjukkan pemahaman dan keterampilan praktik Koding dan Kecerdasan Artifisial yang baik dalam {tps}.',
+    improvementTemplate: 'Perlu penguatan logika algoritma, latihan debugging program, serta pendampingan pada Koding dan Kecerdasan Artifisial dalam {tps}.',
+    allOptimalFollowUpTemplate: 'Terus kembangkan kreativitas pemrograman, ketelitian analisis data, serta etika pemanfaatan Kecerdasan Artifisial secara bertanggung jawab.',
+    tpPatterns: []
+  },
+  {
     subjectId: 'sub-seni',
     subjectName: 'Seni Budaya & Prakarya',
     ranges: [

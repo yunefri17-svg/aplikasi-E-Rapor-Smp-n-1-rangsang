@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Classroom, Subject, Student, AssessmentScore, SchoolProfile, User } from '../types/erapor';
+import { Classroom, Subject, Student, AssessmentScore, SchoolProfile, TeachingAssignment, User } from '../types/erapor';
 import { Files, Download, Printer, Award, FileSpreadsheet, Lock } from 'lucide-react';
 import { exportLegerToExcel } from '../services/excelService';
 import { generateLegerPDF } from '../services/pdfService';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
-import { sortSubjects } from '../utils/subjectSort';
+import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
 
 interface LegerNilaiViewProps {
   school: SchoolProfile;
@@ -13,6 +13,7 @@ interface LegerNilaiViewProps {
   subjects: Subject[];
   students: Student[];
   scores: AssessmentScore[];
+  teachingAssignments?: TeachingAssignment[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
@@ -24,6 +25,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   subjects,
   students,
   scores,
+  teachingAssignments = [],
   academicYear,
   semester,
   currentUser
@@ -51,14 +53,21 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   }
 
   const sortedAllClassrooms = sortClassrooms(classrooms);
-  const sortedSubjects = sortSubjects(subjects);
-
   const visibleClassrooms = isWaliKelas
     ? sortedAllClassrooms.filter((c) => c.id === currentUser.classId)
     : sortedAllClassrooms;
 
   const classroom = classrooms.find((c) => c.id === selectedClass) || classrooms[0];
   const classStudents = students.filter((s) => s.classId === selectedClass);
+  const sortedSubjects = getSubjectsForClassPeriod({
+    subjects,
+    classId: selectedClass,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores,
+    classStudentIds: classStudents.map((s) => s.id)
+  });
 
   // Score matrix lookup: studentId -> subjectId -> finalScore
   const scoreMap = new Map<string, Map<string, number>>();

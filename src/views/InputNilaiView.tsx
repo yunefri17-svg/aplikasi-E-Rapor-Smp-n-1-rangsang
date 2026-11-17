@@ -49,6 +49,10 @@ import {
   getSummativeTpIds,
   isPeriodInputLocked
 } from '../utils/tpAnalysisAndDescription';
+import {
+  isElectiveSubject,
+  isStudentParticipatingInSubject
+} from '../utils/electiveSubjectHelper';
 
 interface InputNilaiViewProps {
   classrooms: Classroom[];
@@ -264,10 +268,52 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   const formatifWeight = (curMerdeka?.formatifWeight || 50) / 100;
   const sumatifWeight = (curMerdeka?.sumatifWeight || 50) / 100;
 
-  const classStudents = useMemo(
-    () => sortStudentsAlphabetically(students.filter((s) => s.classId === selectedClass)),
+  const isElectiveActiveSubject = isElectiveSubject(currentSubjectObj);
+
+  const matchingElectiveAssignments = useMemo(() => {
+    if (!isElectiveActiveSubject) return [];
+    return teachingAssignments.filter(
+      (ta) =>
+        ta.subjectId === selectedSubject &&
+        ta.classId === selectedClass &&
+        ta.status !== 'inactive' &&
+        (!ta.academicYear || ta.academicYear === academicYear) &&
+        (!ta.semester || ta.semester === 'Semua' || ta.semester === semester)
+    );
+  }, [isElectiveActiveSubject, teachingAssignments, selectedSubject, selectedClass, academicYear, semester]);
+
+  const rawClassStudentsCount = useMemo(
+    () => students.filter((s) => s.classId === selectedClass).length,
     [students, selectedClass]
   );
+
+  const classStudents = useMemo(() => {
+    const sorted = sortStudentsAlphabetically(students.filter((s) => s.classId === selectedClass));
+    if (!isElectiveActiveSubject || !currentSubjectObj || matchingElectiveAssignments.length === 0) {
+      return sorted;
+    }
+    return sorted.filter((std) =>
+      isStudentParticipatingInSubject({
+        subject: currentSubjectObj,
+        studentId: std.id,
+        classId: selectedClass,
+        academicYear,
+        semester,
+        teachingAssignments,
+        scores
+      })
+    );
+  }, [
+    students,
+    selectedClass,
+    isElectiveActiveSubject,
+    currentSubjectObj,
+    matchingElectiveAssignments.length,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores
+  ]);
 
   const relevantTPs = useMemo(
     () =>
@@ -1238,6 +1284,31 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
               "{revisionEntry.revisionNote}"
             </div>
           </div>
+        </div>
+      )}
+
+      {isElectiveActiveSubject && (
+        <div
+          className={`p-3.5 rounded-xl border text-xs flex items-center gap-2.5 ${
+            matchingElectiveAssignments.length > 0
+              ? 'bg-cyan-50 border-cyan-200 text-cyan-950'
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <BookOpen className="w-4 h-4 shrink-0" />
+          {matchingElectiveAssignments.length > 0 ? (
+            <span>
+              <strong>Mata Pelajaran Pilihan ({currentSubjectObj?.name}):</strong> Menampilkan{' '}
+              <strong>{classStudents.length}</strong> dari {rawClassStudentsCount} siswa di{' '}
+              <strong>{currentClass?.name}</strong> yang terdaftar mengikuti mata pelajaran ini. Siswa yang tidak mengikuti tidak akan mendapat baris/nilai pada Rapor.
+            </span>
+          ) : (
+            <span>
+              <strong>Mata Pelajaran Pilihan ({currentSubjectObj?.name}):</strong> Kelas{' '}
+              <strong>{currentClass?.name}</strong> belum ditugaskan di menu{' '}
+              <strong>Penugasan Guru Mengajar</strong> untuk periode {academicYear} ({semester}). Hanya siswa/kelas yang ditugaskan (atau memiliki nilai tersimpan) yang akan muncul di Rapor.
+            </span>
+          )}
         </div>
       )}
 

@@ -27,11 +27,18 @@ import {
   Wand2,
   RotateCcw,
   Check,
-  Sparkles
+  Sparkles,
+  Download,
+  Layers,
+  AlertCircle
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
-import { sortSubjects } from '../utils/subjectSort';
+import {
+  getElectiveHistoryRows,
+  getOfficialTranscriptSubjects
+} from '../utils/electiveSubjectHelper';
+import { generateElectiveTranscriptPDF } from '../services/pdfService';
 
 interface TranskripNilaiViewProps {
   school: SchoolProfile;
@@ -65,9 +72,10 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
   const [saveSuccessToast, setSaveSuccessToast] = useState(false);
   const [autoFillModalOpen, setAutoFillModalOpen] = useState(false);
   const [autoFillTargetScore, setAutoFillTargetScore] = useState<number>(80);
+  const [activeTab, setActiveTab] = useState<'official' | 'elective'>('official');
 
   const sortedClassrooms = useMemo(() => sortClassrooms(classrooms), [classrooms]);
-  const sortedSubjectsList = useMemo(() => sortSubjects(subjects), [subjects]);
+  const sortedSubjectsList = useMemo(() => getOfficialTranscriptSubjects(subjects), [subjects]);
 
   // Filter students list
   const filteredStudents = useMemo(() => {
@@ -91,6 +99,15 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
   const currentClass = useMemo(() => {
     return classrooms.find((c) => c.id === currentStudent?.classId);
   }, [classrooms, currentStudent]);
+
+  const electiveHistoryRows = useMemo(() => {
+    return getElectiveHistoryRows({
+      student: currentStudent,
+      subjects,
+      scores,
+      classrooms
+    });
+  }, [currentStudent, subjects, scores, classrooms]);
 
   // Current grade level of student (e.g. '7', '8', or '9')
   const currentGradeNum = useMemo(() => {
@@ -332,6 +349,21 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
     window.print();
   };
 
+  const handleDownloadElectivePDF = () => {
+    if (!currentStudent) return;
+    generateElectiveTranscriptPDF({
+      school,
+      student: currentStudent,
+      classroom: currentClass,
+      classrooms,
+      subjects,
+      scores,
+      rows: electiveHistoryRows,
+      preparedByName: currentUser.name,
+      preparedByNip: currentUser.nip
+    });
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       {/* Header bar */}
@@ -342,7 +374,7 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
             Transkrip Nilai Rapor & Riwayat Perkembangan Siswa
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Rekapitulasi resmi pencapaian nilai rapor peserta didik semester 1 s/d 6 (Kelas VII, VIII, dan IX) SMP NEGERI 1 RANGSANG.
+            Rekapitulasi resmi pencapaian nilai rapor peserta didik semester 1 s/d 6 (Kelas VII, VIII, dan IX) serta riwayat nilai mata pelajaran pilihan tambahan sekolah.
           </p>
         </div>
 
@@ -354,47 +386,100 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
             </div>
           )}
 
-          {/* Toggle Edit Mode button */}
-          <button
-            onClick={() => setIsEditMode(!isEditMode)}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
-              isEditMode
-                ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            <Edit3 className="w-4 h-4" />
-            {isEditMode ? 'Mode Pratinjau Cetak' : 'Edit / Input Nilai S1 - S6'}
-          </button>
+          {activeTab === 'official' ? (
+            <>
+              {/* Toggle Edit Mode button */}
+              <button
+                onClick={() => setIsEditMode(!isEditMode)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                  isEditMode
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                <Edit3 className="w-4 h-4" />
+                {isEditMode ? 'Mode Pratinjau Cetak' : 'Edit / Input Nilai S1 - S6'}
+              </button>
 
-          {isEditMode && (
+              {isEditMode && (
+                <>
+                  <button
+                    onClick={() => setAutoFillModalOpen(true)}
+                    className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+                  >
+                    <Wand2 className="w-4 h-4" />
+                    Isi Otomatis S1 - S6
+                  </button>
+
+                  <button
+                    onClick={handleSaveAllScores}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+                  >
+                    <Save className="w-4 h-4" />
+                    Simpan Nilai Transkrip
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={handlePrint}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+              >
+                <Printer className="w-4 h-4" />
+                Cetak Transkrip Resmi (PDF)
+              </button>
+            </>
+          ) : (
             <>
               <button
-                onClick={() => setAutoFillModalOpen(true)}
-                className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+                onClick={handlePrint}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1.5 transition"
               >
-                <Wand2 className="w-4 h-4" />
-                Isi Otomatis S1 - S6
+                <Printer className="w-4 h-4" />
+                Cetak Riwayat Mapel Pilihan
               </button>
 
               <button
-                onClick={handleSaveAllScores}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+                onClick={handleDownloadElectivePDF}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
               >
-                <Save className="w-4 h-4" />
-                Simpan Nilai Transkrip
+                <Download className="w-4 h-4" />
+                Simpan PDF Riwayat Mapel Pilihan
               </button>
             </>
           )}
-
-          <button
-            onClick={handlePrint}
-            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
-          >
-            <Printer className="w-4 h-4" />
-            Cetak Transkrip Resmi (PDF)
-          </button>
         </div>
+      </div>
+
+      {/* Mode Tabs */}
+      <div className="flex flex-wrap gap-2 border-b border-slate-200 text-xs font-bold print:hidden">
+        <button
+          type="button"
+          onClick={() => setActiveTab('official')}
+          className={`flex items-center gap-2 px-4 py-2.5 border-b-2 transition rounded-t-lg ${
+            activeTab === 'official'
+              ? 'border-blue-600 text-blue-700 bg-blue-50/60'
+              : 'border-transparent text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          Transkrip Nilai Resmi Pemerintah (S1–S6)
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('elective')}
+          className={`flex items-center gap-2 px-4 py-2.5 border-b-2 transition rounded-t-lg ${
+            activeTab === 'elective'
+              ? 'border-cyan-600 text-cyan-800 bg-cyan-50/70'
+              : 'border-transparent text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          Riwayat Nilai Mapel Pilihan (Koding &amp; KA)
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-cyan-100 text-cyan-800 border border-cyan-200">
+            {electiveHistoryRows.length}
+          </span>
+        </button>
       </div>
 
       {/* Selectors Toolbar */}
@@ -451,8 +536,8 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
       </div>
 
       {/* Information Banner for Edit Mode */}
-      {isEditMode && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in">
+      {activeTab === 'official' && isEditMode && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in print:hidden">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-amber-600 shrink-0" />
             <div>
@@ -468,7 +553,7 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
         </div>
       )}
 
-      {currentStudent && (
+      {currentStudent && activeTab === 'official' && (
         <div className="space-y-6">
           {/* Visual Trend Chart Card (Hidden on print) */}
           <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4 print:hidden">
@@ -675,6 +760,166 @@ export const TranskripNilaiView: React.FC<TranskripNilaiViewProps> = ({
               <div className="text-right">
                 <div className="text-slate-500 mb-1">{school.reportPlace || 'Tanjung Samak'}, {school.reportDate}</div>
                 <div className="font-bold">Kepala SMP NEGERI 1 RANGSANG</div>
+                <div className="h-16"></div>
+                <div className="font-black underline text-sm">{school.headmasterName}</div>
+                <div className="text-[11px] text-slate-500 font-mono">NIP. {school.headmasterNip}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {currentStudent && activeTab === 'elective' && (
+        <div className="space-y-6">
+          <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-4 text-xs text-cyan-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-cyan-700 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block">Catatan Hasil Belajar Mata Pelajaran Pilihan (Tambahan Sekolah)</strong>
+                <span className="text-[11px] text-cyan-800">
+                  Dokumen ini terpisah dari Transkrip Nilai Resmi Pemerintah agar format transkrip resmi tetap terjaga. Seluruh riwayat nilai <strong>Koding dan Kecerdasan Artifisial</strong> lintas semester dan kenaikan kelas tersimpan melekat pada identitas siswa.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="px-3 py-1.5 rounded-lg border border-cyan-300 bg-white hover:bg-cyan-100 text-cyan-900 font-bold text-xs flex items-center gap-1.5 transition"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                Cetak
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadElectivePDF}
+                className="px-3.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs flex items-center gap-1.5 transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Simpan PDF
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-sm space-y-6 print:border-none print:shadow-none print:p-0">
+            {/* Kop Surat Resmi */}
+            <div className="border-b-2 border-slate-900 pb-4 text-center space-y-1">
+              <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                PEMERINTAH KABUPATEN KEPULAUAN MERANTI
+              </div>
+              <div className="text-xs font-bold text-slate-800 uppercase">
+                DINAS PENDIDIKAN DAN KEBUDAYAAN
+              </div>
+              <div className="text-lg md:text-xl font-black text-slate-900 uppercase tracking-tight">
+                {school.name}
+              </div>
+              <div className="text-[10px] text-slate-600">
+                NPSN: {school.npsn} {school.nss ? `• NSS: ${school.nss}` : ''} • Alamat: {school.address}, Kec. {school.kecamatan}, Kab. {school.kabupaten} - {school.provinsi}
+              </div>
+            </div>
+
+            {/* Document Title */}
+            <div className="text-center pt-1">
+              <h2 className="text-base font-black text-slate-900 uppercase tracking-wider inline-block border-b-2 border-slate-900 pb-1">
+                RIWAYAT NILAI MATA PELAJARAN PILIHAN
+              </h2>
+              <div className="text-xs italic text-slate-600 mt-1.5">
+                Catatan Hasil Belajar Tambahan Sekolah — Bukan Transkrip Nilai Resmi Pemerintah
+              </div>
+            </div>
+
+            {/* Student Metadata Box */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1.5 text-xs text-slate-800 pt-1 pb-2 border-b border-slate-200">
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-500">Nama Peserta Didik:</span>
+                <span className="font-extrabold uppercase text-slate-900">{currentStudent.name}</span>
+              </div>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-500">NIS / NISN:</span>
+                <span className="font-mono font-bold">{currentStudent.nis || '-'} / {currentStudent.nisn || '-'}</span>
+              </div>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-500">Kelas Saat Ini:</span>
+                <span className="font-semibold text-blue-700">{currentClass?.name || '-'}</span>
+              </div>
+              <div className="flex justify-between py-0.5">
+                <span className="text-slate-500">Tempat, Tanggal Lahir:</span>
+                <span className="font-medium">{currentStudent.pob}, {currentStudent.dob}</span>
+              </div>
+            </div>
+
+            {/* Elective Grades History Table */}
+            <div className="overflow-x-auto border border-slate-300 rounded-lg">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead className="bg-cyan-50 text-slate-800 font-extrabold border-b-2 border-slate-300">
+                  <tr>
+                    <th className="px-2.5 py-2.5 text-center w-10 border-r border-slate-300">No</th>
+                    <th className="px-3 py-2.5 border-r border-slate-300">Mata Pelajaran</th>
+                    <th className="px-3 py-2.5 text-center border-r border-slate-300 w-28">Tahun Ajaran</th>
+                    <th className="px-3 py-2.5 text-center border-r border-slate-300 w-28">Semester</th>
+                    <th className="px-3 py-2.5 text-center border-r border-slate-300 w-24">Kelas</th>
+                    <th className="px-3 py-2.5 text-center border-r border-slate-300 w-20 bg-blue-50/70">Nilai Akhir</th>
+                    <th className="px-3 py-2.5">Deskripsi Capaian Kompetensi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {electiveHistoryRows.length > 0 ? (
+                    electiveHistoryRows.map((row, idx) => (
+                      <tr key={row.scoreId} className="hover:bg-slate-50 transition">
+                        <td className="px-2.5 py-2.5 text-center text-slate-500 font-semibold border-r border-slate-200">
+                          {idx + 1}
+                        </td>
+                        <td className="px-3 py-2.5 font-bold text-slate-900 border-r border-slate-200">
+                          {row.subjectName}
+                        </td>
+                        <td className="px-3 py-2.5 text-center font-mono text-slate-700 border-r border-slate-200">
+                          {row.academicYear}
+                        </td>
+                        <td className="px-3 py-2.5 text-center font-semibold text-slate-700 border-r border-slate-200">
+                          {row.semesterNumber ? `Sem. ${row.semesterNumber} (${row.semester})` : row.semester}
+                        </td>
+                        <td className="px-3 py-2.5 text-center font-semibold text-slate-700 border-r border-slate-200">
+                          {row.className}
+                        </td>
+                        <td className="px-3 py-2.5 text-center font-black text-blue-800 bg-blue-50/30 border-r border-slate-200">
+                          {row.finalScore}
+                        </td>
+                        <td className="px-3 py-2.5 text-slate-700 leading-relaxed">
+                          {row.description}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400 italic">
+                        Peserta didik ini belum memiliki riwayat nilai pada mata pelajaran pilihan (Koding dan Kecerdasan Artifisial).
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Official Disclaimer Box */}
+            <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-300 text-[11px] text-slate-700 leading-relaxed">
+              <strong>Keterangan Penting:</strong> Dokumen <em>Riwayat Nilai Mata Pelajaran Pilihan</em> ini merupakan catatan resmi internal {school.name} atas hasil belajar tambahan yang diikuti peserta didik (termasuk mata pelajaran Koding dan Kecerdasan Artifisial) dan <strong>BUKAN merupakan Transkrip Nilai Resmi Pemerintah</strong>.
+            </div>
+
+            {/* Signatures */}
+            <div className="pt-6 border-t border-slate-200 grid grid-cols-2 gap-8 text-xs text-slate-800">
+              <div>
+                <div className="font-semibold text-slate-500 mb-1">Mengetahui,</div>
+                <div className="font-bold">Wali Kelas / Guru Pengampu</div>
+                <div className="h-16"></div>
+                <div className="font-black underline">{currentUser.name}</div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  {currentUser.nip ? `NIP. ${currentUser.nip}` : 'Tenaga Pendidik SMPN 1 Rangsang'}
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-slate-500 mb-1">{school.reportPlace || 'Tanjung Samak'}, {school.reportDate}</div>
+                <div className="font-bold">Kepala {school.name}</div>
                 <div className="h-16"></div>
                 <div className="font-black underline text-sm">{school.headmasterName}</div>
                 <div className="text-[11px] text-slate-500 font-mono">NIP. {school.headmasterNip}</div>

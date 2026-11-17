@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
-import { Classroom, Subject, Student, AssessmentScore, User } from '../types/erapor';
+import { Classroom, Subject, Student, AssessmentScore, TeachingAssignment, User } from '../types/erapor';
 import { Table, CheckCircle2, AlertTriangle, FileSpreadsheet, Download, Printer, Lock } from 'lucide-react';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
-import { sortSubjects } from '../utils/subjectSort';
+import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
 
 interface RekapitulasiNilaiViewProps {
   classrooms: Classroom[];
   subjects: Subject[];
   students: Student[];
   scores: AssessmentScore[];
+  teachingAssignments?: TeachingAssignment[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
@@ -20,6 +21,7 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
   subjects,
   students,
   scores,
+  teachingAssignments = [],
   academicYear,
   semester,
   currentUser
@@ -47,13 +49,20 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
   }
 
   const sortedAllClassrooms = sortClassrooms(classrooms);
-  const sortedSubjects = sortSubjects(subjects);
-
   const visibleClassrooms = isWaliKelas
     ? sortedAllClassrooms.filter((c) => c.id === currentUser.classId)
     : sortedAllClassrooms;
 
   const classStudents = students.filter((s) => s.classId === selectedClass);
+  const sortedSubjects = getSubjectsForClassPeriod({
+    subjects,
+    classId: selectedClass,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores,
+    classStudentIds: classStudents.map((s) => s.id)
+  });
   const classScores = scores.filter(
     (sc) => sc.classId === selectedClass && sc.academicYear === academicYear && sc.semester === semester
   );

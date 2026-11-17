@@ -4,6 +4,7 @@ import {
   Teacher,
   Subject,
   Classroom,
+  Student,
   User
 } from '../types/erapor';
 import {
@@ -20,17 +21,23 @@ import {
   Building,
   Calendar,
   AlertCircle,
-  Sparkles,
   Layers,
   GraduationCap
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
+import {
+  isElectiveSubject,
+  normalizeAcademicYearValue
+} from '../utils/electiveSubjectHelper';
 
 interface PenugasanGuruViewProps {
   teachingAssignments: TeachingAssignment[];
   teachers: Teacher[];
   subjects: Subject[];
   classrooms: Classroom[];
+  students?: Student[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
@@ -43,6 +50,7 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
   teachers,
   subjects,
   classrooms,
+  students = [],
   academicYear,
   semester,
   currentUser,
@@ -63,6 +71,7 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
   const [editingTeacherId, setEditingTeacherId] = useState<string>(teachers[0]?.id || '');
   const [editingSubjectId, setEditingSubjectId] = useState<string>(subjects[0]?.id || '');
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
+  const [excludedStudentIds, setExcludedStudentIds] = useState<string[]>([]);
   const [assignmentSemester, setAssignmentSemester] = useState<'Semua' | 'Ganjil' | 'Genap'>('Semua');
   const [assignmentStatus, setAssignmentStatus] = useState<'active' | 'inactive'>('active');
   const [assignmentNotes, setAssignmentNotes] = useState('');
@@ -72,6 +81,16 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const sortedClassrooms = useMemo(() => sortClassrooms(classrooms), [classrooms]);
+  const sortedSubjects = useMemo(() => sortSubjects(subjects), [subjects]);
+  const editingSubjectObj = useMemo(
+    () => subjects.find((s) => s.id === editingSubjectId),
+    [subjects, editingSubjectId]
+  );
+  const isEditingElective = isElectiveSubject(editingSubjectObj);
+  const singleClassStudents = useMemo(() => {
+    if (selectedClassIds.length !== 1) return [];
+    return sortStudentsAlphabetically(students.filter((s) => s.classId === selectedClassIds[0]));
+  }, [students, selectedClassIds]);
 
   // Quick select helpers
   const handleSelectAllClasses = () => {
@@ -92,8 +111,9 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
     setModalMode('create');
     setEditingAssignmentId(null);
     setEditingTeacherId(teachers[0]?.id || '');
-    setEditingSubjectId(subjects[0]?.id || '');
+    setEditingSubjectId(sortedSubjects[0]?.id || subjects[0]?.id || '');
     setSelectedClassIds([]);
+    setExcludedStudentIds([]);
     setAssignmentSemester('Semua');
     setAssignmentStatus('active');
     setAssignmentNotes('');
@@ -106,6 +126,9 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
     setEditingTeacherId(assignment.teacherId);
     setEditingSubjectId(assignment.subjectId);
     setSelectedClassIds([assignment.classId]);
+    setExcludedStudentIds(
+      Array.isArray(assignment.excludedStudentIds) ? [...assignment.excludedStudentIds] : []
+    );
     setAssignmentSemester(assignment.semester || 'Semua');
     setAssignmentStatus(assignment.status || 'active');
     setAssignmentNotes(assignment.notes || '');
@@ -121,6 +144,11 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
 
     const teacher = teachers.find((t) => t.id === editingTeacherId);
     const subject = subjects.find((s) => s.id === editingSubjectId);
+
+    const applyElectiveFields =
+      isEditingElective && selectedClassIds.length === 1
+        ? { excludedStudentIds }
+        : { excludedStudentIds: [] as string[] };
 
     if (modalMode === 'edit' && editingAssignmentId) {
       // Single edit
@@ -138,6 +166,7 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
             academicYear,
             semester: assignmentSemester,
             status: assignmentStatus,
+            ...applyElectiveFields,
             notes: assignmentNotes,
             updatedAt: new Date().toISOString()
           };
@@ -164,6 +193,8 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
           academicYear,
           semester: assignmentSemester,
           status: assignmentStatus,
+          excludedStudentIds:
+            isEditingElective && selectedClassIds.length === 1 ? excludedStudentIds : [],
           notes: assignmentNotes,
           updatedAt: new Date().toISOString()
         };
@@ -385,16 +416,31 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
                       </td>
                       <td className="py-3 px-4">
                         <div className="font-semibold text-blue-900">{a.subjectName || subject?.name || a.subjectId}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{subject?.code} &bull; Kelompok {subject?.category}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {subject?.code} &bull; {subject?.category === 'Pilihan' ? 'Mapel Pilihan' : `Kelompok ${subject?.category}`}
+                        </div>
                       </td>
                       <td className="py-3 px-4">
                         <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
                           {a.className || classroom?.name || a.classId}
                         </span>
+                        {isElectiveSubject(subject) && (
+                          <div className="text-[10px] text-cyan-800 font-medium mt-1">
+                            {Array.isArray(a.excludedStudentIds) && a.excludedStudentIds.length > 0
+                              ? `Peserta terpilih (${a.excludedStudentIds.length} siswa dikecualikan)`
+                              : 'Seluruh siswa di kelas ini'}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-slate-600">
                         <div>{a.academicYear || academicYear}</div>
                         <div className="text-[11px] text-slate-400">Semester: {a.semester || 'Semua'}</div>
+                        {a.academicYear &&
+                          normalizeAcademicYearValue(a.academicYear) !== normalizeAcademicYearValue(academicYear) && (
+                            <div className="text-[10px] font-bold text-amber-700 mt-0.5">
+                              Beda T.P. Aktif ({academicYear})
+                            </div>
+                          )}
                       </td>
                       <td className="py-3 px-4 text-center">
                         <span
@@ -484,12 +530,17 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
                   required
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-semibold bg-white text-slate-800 focus:ring-2 focus:ring-blue-500"
                 >
-                  {subjects.map((s) => (
+                  {sortedSubjects.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.name} ({s.code} - Kelompok {s.category})
+                      {s.name} ({s.code} - {s.category === 'Pilihan' ? 'Mapel Pilihan' : `Kelompok ${s.category}`})
                     </option>
                   ))}
                 </select>
+                {isEditingElective && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-900 text-[11px] leading-relaxed">
+                    <strong>Mata Pelajaran Pilihan:</strong> Hanya kelas yang ditetapkan di bawah ini (serta siswa peserta) yang akan mendapatkan mata pelajaran ini pada rapor.
+                  </div>
+                )}
               </div>
 
               {/* Select Kelas (Checkboxes with quick selectors) */}
@@ -579,6 +630,63 @@ export const PenugasanGuruView: React.FC<PenugasanGuruViewProps> = ({
                   })}
                 </div>
               </div>
+
+              {/* Selective Student Participation for Mapel Pilihan when 1 class is selected */}
+              {isEditingElective && singleClassStudents.length > 0 && (
+                <div className="p-3 rounded-xl border border-cyan-200 bg-cyan-50/40 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 text-xs">
+                      Peserta Siswa Mapel Pilihan ({singleClassStudents.length - excludedStudentIds.filter((id) => singleClassStudents.some((s) => s.id === id)).length}/{singleClassStudents.length} ikut)
+                    </span>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setExcludedStudentIds([])}
+                        className="text-blue-700 font-bold hover:underline"
+                      >
+                        Ikut Semua
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setExcludedStudentIds(singleClassStudents.map((s) => s.id))}
+                        className="text-rose-600 font-semibold hover:underline"
+                      >
+                        Kosongkan
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto p-1">
+                    {singleClassStudents.map((std) => {
+                      const isExcluded = excludedStudentIds.includes(std.id);
+                      return (
+                        <label
+                          key={std.id}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border text-[11px] cursor-pointer ${
+                            !isExcluded
+                              ? 'bg-white border-cyan-300 text-slate-800 font-semibold'
+                              : 'bg-slate-100 border-slate-200 text-slate-400'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!isExcluded}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setExcludedStudentIds((prev) => prev.filter((id) => id !== std.id));
+                              } else {
+                                setExcludedStudentIds((prev) => Array.from(new Set([...prev, std.id])));
+                              }
+                            }}
+                            className="rounded text-cyan-600 focus:ring-cyan-500"
+                          />
+                          <span className="truncate">{std.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Semester & Status */}
               <div className="grid grid-cols-2 gap-3">

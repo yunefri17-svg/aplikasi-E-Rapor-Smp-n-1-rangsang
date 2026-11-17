@@ -551,8 +551,8 @@ runTest('8. Student differentiation produces distinct competence narratives per 
   assert.ok(descB.highestCompetenceDesc.toLowerCase().includes('cerita fantasi'));
 });
 
-runTest('9. Description Bank tpPatterns + all 11 subjects preserved on merge', () => {
-  assert.equal(defaultDescriptionBank.length, 11);
+runTest('9. Description Bank tpPatterns + all 12 subjects preserved on merge', () => {
+  assert.equal(defaultDescriptionBank.length, 12);
   const customBank = mergeDescriptionBankWithDefaults([
     {
       subjectId: 'sub-bindo',
@@ -569,7 +569,7 @@ runTest('9. Description Bank tpPatterns + all 11 subjects preserved on merge', (
       ]
     }
   ]);
-  assert.equal(customBank.length, 11);
+  assert.equal(customBank.length, 12);
 
   const anA = analyzeStudentTPAttainment({
     studentId: 'std-a',

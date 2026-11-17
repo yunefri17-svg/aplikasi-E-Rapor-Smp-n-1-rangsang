@@ -71,6 +71,7 @@ import {
   OFFICIAL_KOKURIKULER_DIMENSIONS,
   OFFICIAL_KOKURIKULER_THEMES
 } from '../data/kokurikulerMaster';
+import { ensureElectiveCodingSubject } from '../utils/electiveSubjectHelper';
 
 const STORAGE_KEY = 'erapor_smpn1rangsang_db_v3';
 
@@ -268,7 +269,7 @@ export const loadDatabase = (): AppDatabase => {
       syncUsersWithTeachers({
         schoolProfile: activeProfile,
         curricula: parsed.curricula || initialCurricula,
-        subjects: parsed.subjects || initialSubjects,
+        subjects: ensureElectiveCodingSubject(parsed.subjects || initialSubjects),
         teachers: loadedTeachers,
         classrooms: sortClassrooms(parsed.classrooms || initialClassrooms),
         students,

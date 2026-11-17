@@ -7,12 +7,14 @@ import {
   Attendance,
   StudentExtracurricular,
   HomeroomNote,
+  TeachingAssignment,
   User
 } from '../types/erapor';
 import { FileCheck, CheckCircle2, AlertCircle, Edit3, Save, Check, Printer, ArrowRight, Lock, TrendingUp } from 'lucide-react';
 import { MenuId } from '../components/layout/Sidebar';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
+import { getReportSubjectsForStudent } from '../utils/electiveSubjectHelper';
 
 interface PengolahanRaporViewProps {
   classrooms: Classroom[];
@@ -22,6 +24,7 @@ interface PengolahanRaporViewProps {
   attendanceList: Attendance[];
   studentExtracurriculars: StudentExtracurricular[];
   homeroomNotes: HomeroomNote[];
+  teachingAssignments?: TeachingAssignment[];
   onSaveHomeroomNotes: (notes: HomeroomNote[]) => void;
   onNavigateToPrint: (studentId?: string) => void;
   academicYear: string;
@@ -37,6 +40,7 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
   attendanceList,
   studentExtracurriculars,
   homeroomNotes,
+  teachingAssignments = [],
   onSaveHomeroomNotes,
   onNavigateToPrint,
   academicYear,
@@ -195,7 +199,19 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
             (e) => e.studentId === std.id && e.academicYear === academicYear && e.semester === semester
           );
 
-          const isMapelComplete = stdScores.length >= subjects.length;
+          const requiredSubjects = getReportSubjectsForStudent({
+            subjects,
+            studentId: std.id,
+            classId: selectedClass,
+            academicYear,
+            semester,
+            teachingAssignments,
+            scores: stdScores
+          });
+          const requiredSubjectIds = new Set(requiredSubjects.map((s) => s.id));
+          const applicableScores = stdScores.filter((sc) => requiredSubjectIds.has(sc.subjectId));
+
+          const isMapelComplete = applicableScores.length >= requiredSubjects.length;
           const isAttComplete = stdAttendance !== undefined;
           const isEkskulComplete = stdEkskul.length > 0;
           const isReady = isMapelComplete && isAttComplete;
@@ -229,7 +245,7 @@ export const PengolahanRaporView: React.FC<PengolahanRaporViewProps> = ({
                         : 'bg-amber-50 text-amber-800 border-amber-200'
                     }`}
                   >
-                    Nilai Mapel: {stdScores.length}/{subjects.length}
+                    Nilai Mapel: {applicableScores.length}/{requiredSubjects.length}
                   </span>
 
                   <span

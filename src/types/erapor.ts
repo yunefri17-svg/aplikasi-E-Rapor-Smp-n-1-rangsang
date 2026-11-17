@@ -26,6 +26,8 @@ export interface TeachingAssignment {
   academicYear: string;
   semester?: 'Ganjil' | 'Genap' | 'Semua';
   status: 'active' | 'inactive';
+  excludedStudentIds?: string[]; // Optional opt-out for elective subjects (Mapel Pilihan)
+  enrolledStudentIds?: string[]; // Optional explicit opt-in whitelist for Mapel Pilihan
   notes?: string;
   updatedAt?: string;
 }
@@ -119,7 +121,9 @@ export interface Subject {
   id: string;
   code: string;
   name: string;
-  category: 'A' | 'B' | 'Muatan Lokal'; // Kemendikbud standard groups
+  category: 'A' | 'B' | 'Muatan Lokal' | 'Pilihan'; // Kemendikbud standard groups + Pilihan
+  isElective?: boolean;
+  excludedFromOfficialTranscript?: boolean;
   orderIndex: number;
   kkm: number; // for K13 or passing standard reference (e.g. 75)
 }

@@ -58,7 +58,7 @@ export const DataMapelView: React.FC<DataMapelViewProps> = ({
             Data Mata Pelajaran Resmi SMP
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Daftar muatan kurikulum, pengelompokan mata pelajaran (A, B, Muatan Lokal), KKM/KKTP acuan, dan urutan cetak rapor.
+            Daftar muatan kurikulum, pengelompokan mata pelajaran (A, B, Muatan Lokal, Pilihan), KKM/KKTP acuan, dan urutan cetak rapor.
           </p>
         </div>
 
@@ -108,10 +108,12 @@ export const DataMapelView: React.FC<DataMapelViewProps> = ({
                           ? 'bg-blue-50 text-blue-800 border-blue-200'
                           : sub.category === 'B'
                           ? 'bg-purple-50 text-purple-800 border-purple-200'
+                          : sub.category === 'Pilihan'
+                          ? 'bg-cyan-50 text-cyan-800 border-cyan-200'
                           : 'bg-emerald-50 text-emerald-800 border-emerald-200'
                       }`}
                     >
-                      Kelompok {sub.category}
+                      {sub.category === 'Pilihan' ? 'Mata Pelajaran Pilihan' : `Kelompok ${sub.category}`}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center font-bold text-slate-800">
@@ -232,11 +234,20 @@ export const DataMapelView: React.FC<DataMapelViewProps> = ({
                 <label className="block font-semibold text-slate-700 mb-1">Kelompok Kurikulum</label>
                 <select
                   value={editingSubject.category}
-                  onChange={(e) => setEditingSubject({ ...editingSubject, category: e.target.value as any })}
+                  onChange={(e) => {
+                    const cat = e.target.value as any;
+                    setEditingSubject({
+                      ...editingSubject,
+                      category: cat,
+                      isElective: cat === 'Pilihan',
+                      excludedFromOfficialTranscript: cat === 'Pilihan'
+                    });
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-semibold"
                 >
                   <option value="A">Kelompok A (Wajib Inti)</option>
                   <option value="B">Kelompok B (Pengembangan Diri / Keterampilan)</option>
+                  <option value="Pilihan">Mata Pelajaran Pilihan (Koding &amp; KA / Tambahan)</option>
                   <option value="Muatan Lokal">Muatan Lokal (BMR / Khas Daerah)</option>
                 </select>
               </div>

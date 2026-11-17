@@ -34,7 +34,10 @@ import {
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
-import { sortSubjects } from '../utils/subjectSort';
+import {
+  getElectiveHistoryRows,
+  getOfficialTranscriptSubjects
+} from '../utils/electiveSubjectHelper';
 
 interface BukuIndukViewProps {
   school: SchoolProfile;
@@ -75,7 +78,16 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
   const [isBatchPrintMode, setIsBatchPrintMode] = useState(false);
 
   const sortedClassrooms = useMemo(() => sortClassrooms(classrooms), [classrooms]);
-  const sortedSubjects = useMemo(() => sortSubjects(subjects), [subjects]);
+  const sortedSubjects = useMemo(() => getOfficialTranscriptSubjects(subjects), [subjects]);
+
+  const activeElectiveRows = useMemo(() => {
+    return getElectiveHistoryRows({
+      student: activeStudentId ? students.find((s) => s.id === activeStudentId) : null,
+      subjects,
+      scores,
+      classrooms
+    });
+  }, [activeStudentId, students, subjects, scores, classrooms]);
 
   // Available admission years
   const availableYearsJoined = useMemo(() => {
@@ -516,6 +528,46 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                   </div>
                 </div>
 
+                {/* Section D.2: Riwayat Nilai Mata Pelajaran Pilihan (Tambahan Sekolah) */}
+                {activeElectiveRows.length > 0 && (
+                  <div className="space-y-2 text-xs">
+                    <div className="bg-cyan-50 border border-cyan-200 px-3 py-1.5 rounded font-extrabold text-cyan-900 uppercase tracking-wider text-[11px] flex items-center justify-between">
+                      <span>D.2. Riwayat Nilai Mata Pelajaran Pilihan (Tambahan Sekolah)</span>
+                      <span className="text-[10px] font-medium normal-case text-cyan-700">Bukan bagian dari Transkrip Resmi Pemerintah</span>
+                    </div>
+                    <div className="overflow-x-auto border border-cyan-200 rounded-lg">
+                      <table className="w-full text-[11px] text-left border-collapse">
+                        <thead className="bg-cyan-50/60 text-slate-700 font-bold border-b border-cyan-200">
+                          <tr>
+                            <th className="px-2 py-2 text-center w-8 border-r border-cyan-200">No</th>
+                            <th className="px-3 py-2 border-r border-cyan-200">Mata Pelajaran</th>
+                            <th className="px-2 py-2 text-center border-r border-cyan-200">Tahun Ajaran</th>
+                            <th className="px-2 py-2 text-center border-r border-cyan-200">Semester</th>
+                            <th className="px-2 py-2 text-center border-r border-cyan-200">Kelas</th>
+                            <th className="px-2 py-2 text-center border-r border-cyan-200 bg-blue-50/50">Nilai Akhir</th>
+                            <th className="px-3 py-2">Deskripsi Capaian Kompetensi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {activeElectiveRows.map((row, rIdx) => (
+                            <tr key={row.scoreId} className="hover:bg-slate-50">
+                              <td className="px-2 py-1.5 text-center text-slate-400 border-r border-slate-100">{rIdx + 1}</td>
+                              <td className="px-3 py-1.5 font-bold text-slate-800 border-r border-slate-100">{row.subjectName}</td>
+                              <td className="px-2 py-1.5 text-center font-mono text-slate-700 border-r border-slate-100">{row.academicYear}</td>
+                              <td className="px-2 py-1.5 text-center text-slate-700 border-r border-slate-100">
+                                {row.semesterNumber ? `Sem. ${row.semesterNumber} (${row.semester})` : row.semester}
+                              </td>
+                              <td className="px-2 py-1.5 text-center text-slate-700 border-r border-slate-100">{row.className}</td>
+                              <td className="px-2 py-1.5 text-center font-black text-blue-700 bg-blue-50/40 border-r border-slate-100">{row.finalScore}</td>
+                              <td className="px-3 py-1.5 text-slate-600">{row.description}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {/* Section E & F: Presensi & Ekstrakurikuler */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                   {/* Presensi */}
@@ -735,6 +787,44 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                       </tbody>
                     </table>
                   </div>
+                  {(() => {
+                    const batchElectives = getElectiveHistoryRows({
+                      student: std,
+                      subjects,
+                      scores,
+                      classrooms
+                    });
+                    if (batchElectives.length === 0) return null;
+                    return (
+                      <div className="mt-2 border border-cyan-200 rounded overflow-hidden">
+                        <div className="bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-900 border-b border-cyan-200">
+                          Riwayat Nilai Mata Pelajaran Pilihan (Tambahan Sekolah)
+                        </div>
+                        <table className="w-full text-[10px] text-left">
+                          <thead className="bg-slate-50 font-bold border-b border-slate-200">
+                            <tr>
+                              <th className="px-2 py-1">Mata Pelajaran</th>
+                              <th className="px-2 py-1 text-center">T.A</th>
+                              <th className="px-2 py-1 text-center">Semester</th>
+                              <th className="px-2 py-1 text-center">Kelas</th>
+                              <th className="px-2 py-1 text-center">Nilai</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {batchElectives.map((row) => (
+                              <tr key={row.scoreId}>
+                                <td className="px-2 py-1 font-semibold">{row.subjectName}</td>
+                                <td className="px-2 py-1 text-center">{row.academicYear}</td>
+                                <td className="px-2 py-1 text-center">{row.semester}</td>
+                                <td className="px-2 py-1 text-center">{row.className}</td>
+                                <td className="px-2 py-1 text-center font-bold text-blue-700">{row.finalScore}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Signature */}

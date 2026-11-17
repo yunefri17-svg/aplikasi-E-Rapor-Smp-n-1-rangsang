@@ -14,39 +14,48 @@ export const OFFICIAL_SUBJECT_ORDER = [
   'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
   'Pendidikan Jasmani, Olahraga, dan Kesehatan', // Variant
   'Informatika',
+  'Koding dan Kecerdasan Artifisial',
   'Seni Budaya & Prakarya',
   'Muatan Lokal Budaya Melayu Riau ( BMR )',
   'Muatan Lokal Budaya Melayu Riau (BMR)' // Variant
 ];
 
+function getOfficialRank(sub: Subject): number {
+  if (sub.id === 'sub-ka') {
+    return OFFICIAL_SUBJECT_ORDER.indexOf('Koding dan Kecerdasan Artifisial');
+  }
+  if (sub.id === 'sub-inf') {
+    return OFFICIAL_SUBJECT_ORDER.indexOf('Informatika');
+  }
+  const lower = (sub.name || '').trim().toLowerCase();
+  if (lower.includes('koding') && (lower.includes('kecerdasan artifisial') || lower.includes('ka'))) {
+    return OFFICIAL_SUBJECT_ORDER.indexOf('Koding dan Kecerdasan Artifisial');
+  }
+  return OFFICIAL_SUBJECT_ORDER.findIndex(
+    (name) => lower.includes(name.toLowerCase()) || name.toLowerCase().includes(lower)
+  );
+}
+
 /**
- * Sort subjects based on official order or orderIndex
+ * Sort subjects based on official Kemendikbud order (keeping Koding dan Kecerdasan Artifisial
+ * directly after Informatika), falling back to orderIndex and name.
  */
 export function sortSubjects(subjects: Subject[]): Subject[] {
   return [...subjects].sort((a, b) => {
-    // 1. Try sorting by orderIndex if both have it and they are different
+    const rankA = getOfficialRank(a);
+    const rankB = getOfficialRank(b);
+
+    if (rankA !== -1 && rankB !== -1) {
+      if (rankA !== rankB) return rankA - rankB;
+    }
+
     if (a.orderIndex !== undefined && b.orderIndex !== undefined && a.orderIndex !== b.orderIndex) {
       return a.orderIndex - b.orderIndex;
     }
 
-    // 2. Fallback to official name-based order
-    const indexA = OFFICIAL_SUBJECT_ORDER.findIndex(name => 
-      a.name.toLowerCase().includes(name.toLowerCase()) || 
-      name.toLowerCase().includes(a.name.toLowerCase())
-    );
-    const indexB = OFFICIAL_SUBJECT_ORDER.findIndex(name => 
-      b.name.toLowerCase().includes(name.toLowerCase()) || 
-      name.toLowerCase().includes(b.name.toLowerCase())
-    );
+    if (rankA !== -1 && rankB === -1) return -1;
+    if (rankB !== -1 && rankA === -1) return 1;
 
-    if (indexA !== -1 && indexB !== -1) {
-      return indexA - indexB;
-    }
-
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-
-    // 3. Last fallback: alphabetical by name
     return a.name.localeCompare(b.name);
   });
 }

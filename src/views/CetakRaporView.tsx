@@ -14,7 +14,8 @@ import {
   KokurikulerGroup,
   KokurikulerActivity,
   KokurikulerDescription,
-  KokurikulerScore
+  KokurikulerScore,
+  TeachingAssignment
 } from '../types/erapor';
 import {
   Printer,
@@ -43,6 +44,14 @@ import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortSubjects } from '../utils/subjectSort';
 import { resolveRaporCompetenceDisplay } from '../utils/tpAnalysisAndDescription';
+import { resolveStudentExtracurricularRows } from '../utils/extracurricularReportHelper';
+import {
+  getReportSubjectsForStudent,
+  hasEnteredAssessmentScore,
+  isElectiveSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 interface CetakRaporViewProps {
   school: SchoolProfile;
@@ -55,6 +64,7 @@ interface CetakRaporViewProps {
   studentExtracurriculars: StudentExtracurricular[];
   homeroomNotes: HomeroomNote[];
   teachers: Teacher[];
+  teachingAssignments?: TeachingAssignment[];
   preselectedStudentId?: string;
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
@@ -78,6 +88,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
   studentExtracurriculars,
   homeroomNotes,
   teachers,
+  teachingAssignments = [],
   preselectedStudentId,
   academicYear,
   semester,
@@ -131,35 +142,45 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
   const currentStudent = students.find((s) => s.id === selectedStudentId) || classStudents[0] || students[0];
   const homeroomTeacher = teachers.find((t) => t.id === classroom?.homeroomTeacherId);
 
+  const effectiveClassId = currentStudent?.classId || classroom?.id;
+
   // Data for the current student
+  const normYear = normalizeAcademicYearValue(academicYear);
+  const normSem = normalizeSemesterValue(semester);
   const studentScores = scores.filter(
     (sc) =>
       sc.studentId === currentStudent?.id &&
-      sc.academicYear === academicYear &&
-      sc.semester === semester
+      normalizeAcademicYearValue(sc.academicYear) === normYear &&
+      normalizeSemesterValue(sc.semester) === normSem
   );
   const scoreLookup = new Map(studentScores.map((s) => [s.subjectId, s]));
 
   const studentAtt = attendanceList.find(
     (a) =>
       a.studentId === currentStudent?.id &&
-      a.academicYear === academicYear &&
-      a.semester === semester
+      normalizeAcademicYearValue(a.academicYear) === normYear &&
+      normalizeSemesterValue(a.semester) === normSem
   );
 
   const studentEkskuls = studentExtracurriculars.filter(
     (e) =>
       e.studentId === currentStudent?.id &&
-      e.academicYear === academicYear &&
-      e.semester === semester
+      normalizeAcademicYearValue(e.academicYear) === normYear &&
+      normalizeSemesterValue(e.semester) === normSem
   );
-  const ekskulMap = new Map(extracurriculars.map((e) => [e.id, e.name]));
+  const resolvedEkskulRows = resolveStudentExtracurricularRows({
+    studentId: currentStudent?.id,
+    academicYear,
+    semester,
+    extracurriculars,
+    studentExtracurriculars
+  });
 
   const studentNote = homeroomNotes.find(
     (n) =>
       n.studentId === currentStudent?.id &&
-      n.academicYear === academicYear &&
-      n.semester === semester
+      normalizeAcademicYearValue(n.academicYear) === normYear &&
+      normalizeSemesterValue(n.semester) === normSem
   );
 
   // Next / Previous Student Navigation
@@ -171,11 +192,24 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
     if (currentIndex < classStudents.length - 1) setSelectedStudentId(classStudents[currentIndex + 1].id);
   };
 
+  // Subject list filtered per student enrollment for Mapel Pilihan
+  const studentReportSubjects = getReportSubjectsForStudent({
+    subjects: sortedSubjects,
+    studentId: currentStudent?.id,
+    classId: effectiveClassId,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores: studentScores
+  });
+
   // Check completeness for data verification notice
-  const missingSubjects = sortedSubjects.filter((sub) => !scoreLookup.has(sub.id));
-  const incompleteDescSubjects = sortedSubjects.filter((sub) => {
+  const missingSubjects = studentReportSubjects.filter(
+    (sub) => !scoreLookup.has(sub.id) || (isElectiveSubject(sub) && !hasEnteredAssessmentScore(scoreLookup.get(sub.id)))
+  );
+  const incompleteDescSubjects = studentReportSubjects.filter((sub) => {
     const sc = scoreLookup.get(sub.id);
-    return Boolean(sc && resolveRaporCompetenceDisplay(sc).isIncompleteDescription);
+    return Boolean(sc && hasEnteredAssessmentScore(sc) && resolveRaporCompetenceDisplay(sc).isIncompleteDescription);
   });
   const isDataComplete =
     currentStudent &&
@@ -234,6 +268,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
       homeroomNote: studentNote,
       academicYear,
       semester,
+      teachingAssignments,
       kokurikulerGroups,
       kokurikulerActivities,
       kokurikulerDescriptions,
@@ -281,6 +316,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
           academicYear,
           semester,
           mode: batchMode,
+          teachingAssignments,
           kokurikulerGroups,
           kokurikulerActivities,
           kokurikulerDescriptions,
@@ -938,10 +974,12 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-300">
-                  {sortedSubjects.map((sub, idx) => {
+                  {studentReportSubjects.map((sub, idx) => {
                     const sc = scoreLookup.get(sub.id);
-                    const finalVal = sc?.finalScore !== undefined ? sc.finalScore : '-';
-                    const display = resolveRaporCompetenceDisplay(sc);
+                    const isElectiveEmpty = isElectiveSubject(sub) && !hasEnteredAssessmentScore(sc);
+                    const rawScoreVal = sc?.manualFinalScore ?? sc?.finalScore;
+                    const finalVal = isElectiveEmpty ? '' : rawScoreVal !== undefined ? rawScoreVal : '-';
+                    const display = isElectiveEmpty ? null : resolveRaporCompetenceDisplay(sc);
 
                     return (
                       <tr key={sub.id} className="align-top">
@@ -955,7 +993,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                           {finalVal}
                         </td>
                         <td className="px-3 py-2 text-slate-800 leading-relaxed text-[11px] space-y-1">
-                          {display.isMissingScore ? (
+                          {isElectiveEmpty || !display ? null : display.isMissingScore ? (
                             <span className="text-slate-400 italic">{display.text}</span>
                           ) : display.isIncompleteDescription ? (
                             <span className="text-amber-700 italic">{display.text}</span>
@@ -1050,25 +1088,25 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-300">
-                    {studentEkskuls.length > 0 ? (
-                      studentEkskuls.map((se, i) => (
-                        <tr key={se.id}>
-                          <td className="px-2 py-1.5 text-center border-r border-slate-300">{i + 1}</td>
+                    {resolvedEkskulRows.length > 0 ? (
+                      resolvedEkskulRows.map((row) => (
+                        <tr key={row.id}>
+                          <td className="px-2 py-1.5 text-center border-r border-slate-300">{row.no}</td>
                           <td className="px-2 py-1.5 font-semibold border-r border-slate-300">
-                            {ekskulMap.get(se.extracurricularId) || 'Ekstrakurikuler'}
+                            {row.activityName}
                           </td>
                           <td className="px-2 py-1.5 text-center font-bold border-r border-slate-300">
-                            {se.predicate}
+                            {row.predicate}
                           </td>
-                          <td className="px-2 py-1.5 text-slate-600 text-[11px]">{se.description}</td>
+                          <td className="px-2 py-1.5 text-slate-600 text-[11px]">{row.description}</td>
                         </tr>
                       ))
                     ) : (
-                      <tr>
-                        <td className="px-2 py-1.5 text-center border-r border-slate-300">1</td>
-                        <td className="px-2 py-1.5 font-semibold border-r border-slate-300">Pramuka Gudep SMPN 1 Rangsang</td>
-                        <td className="px-2 py-1.5 text-center font-bold border-r border-slate-300">Baik</td>
-                        <td className="px-2 py-1.5 text-slate-600 text-[11px]">Aktif mengikuti latihan kepramukaan rutin.</td>
+                      <tr className="h-8">
+                        <td className="px-2 py-2 text-center border-r border-slate-300">&nbsp;</td>
+                        <td className="px-2 py-2 border-r border-slate-300">&nbsp;</td>
+                        <td className="px-2 py-2 text-center border-r border-slate-300">&nbsp;</td>
+                        <td className="px-2 py-2">&nbsp;</td>
                       </tr>
                     )}
                   </tbody>

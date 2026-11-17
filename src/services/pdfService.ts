@@ -15,12 +15,25 @@ import {
   KokurikulerActivity,
   KokurikulerDescription,
   KokurikulerScore,
-  KokurikulerDimensionMaster
+  KokurikulerDimensionMaster,
+  TeachingAssignment
 } from '../types/erapor';
 import { getTutWuriHandayaniDataUrl } from '../components/common/TutWuriHandayaniLogo';
 import { sortSubjects } from '../utils/subjectSort';
 import { getSubdimensionMap } from '../utils/kokurikulerHelper';
-import { resolveRaporCompetenceDisplay } from '../utils/tpAnalysisAndDescription';
+import {
+  buildPdfExtracurricularTableBody,
+  resolveStudentExtracurricularRows
+} from '../utils/extracurricularReportHelper';
+import {
+  buildElectiveTranscriptTableRows,
+  buildReportGradeRows,
+  ELECTIVE_TRANSCRIPT_DISCLAIMER,
+  ELECTIVE_TRANSCRIPT_SUBTITLE,
+  ELECTIVE_TRANSCRIPT_TITLE,
+  ElectiveHistoryRow,
+  getElectiveHistoryRows
+} from '../utils/electiveSubjectHelper';
 
 export interface ReportCardExportOptions {
   school: SchoolProfile;
@@ -35,6 +48,7 @@ export interface ReportCardExportOptions {
   homeroomNote: HomeroomNote | undefined;
   academicYear: string;
   semester: string;
+  teachingAssignments?: TeachingAssignment[];
   kokurikulerGroups?: KokurikulerGroup[];
   kokurikulerActivities?: KokurikulerActivity[];
   kokurikulerDescriptions?: KokurikulerDescription[];
@@ -55,6 +69,7 @@ export interface BatchClassReportOptions {
   academicYear: string;
   semester: string;
   mode?: 'complete' | 'gradesOnly';
+  teachingAssignments?: TeachingAssignment[];
   kokurikulerGroups?: KokurikulerGroup[];
   kokurikulerActivities?: KokurikulerActivity[];
   kokurikulerDescriptions?: KokurikulerDescription[];
@@ -326,13 +341,13 @@ export const buildReportContentPages = (
     homeroomNote,
     academicYear,
     semester,
+    teachingAssignments = [],
     kokurikulerGroups = [],
     kokurikulerActivities = [],
     kokurikulerDescriptions = [],
     kokurikulerScores = []
   } = options;
 
-  const sortedSubjects = sortSubjects(subjects);
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Title (Standar Kurikulum Merdeka - Tanpa Kop Surat di Halaman Nilai)
@@ -380,20 +395,20 @@ export const buildReportContentPages = (
   currentY += 4;
 
   // Subject Grades Table
-  const scoreLookup = new Map(scores.map((sc) => [sc.subjectId, sc]));
-  const tableRows = sortedSubjects.map((sub, idx) => {
-    const sc = scoreLookup.get(sub.id);
-    const finalVal = sc?.finalScore !== undefined ? String(sc.finalScore) : '-';
-    const competenceDisplay = resolveRaporCompetenceDisplay(sc);
-    const competenceText = competenceDisplay.parts.join('\n');
-
-    return [
-      idx + 1,
-      sub.name,
-      finalVal,
-      competenceText
-    ];
-  });
+  const tableRows = buildReportGradeRows({
+    subjects,
+    scores,
+    studentId: student.id,
+    classId: classroom.id,
+    academicYear,
+    semester: (semester === 'Genap' ? 'Genap' : 'Ganjil'),
+    teachingAssignments
+  }).map((row) => [
+    row.no,
+    row.subjectName,
+    row.finalScoreText,
+    row.competenceText
+  ]);
 
   autoTable(doc, {
     startY: currentY,
@@ -522,17 +537,14 @@ export const buildReportContentPages = (
   doc.text('C. Kegiatan Ekstrakurikuler', 14, finalY);
   finalY += 3;
 
-  const ekskulMap = new Map(extracurriculars.map((e) => [e.id, e.name]));
-  const ekskulRows = studentExtracurriculars.map((se, i) => [
-    i + 1,
-    ekskulMap.get(se.extracurricularId) || 'Ekstrakurikuler',
-    se.predicate,
-    se.description
-  ]);
-
-  if (ekskulRows.length === 0) {
-    ekskulRows.push(['1', 'Pramuka Gudep SMPN 1 Rangsang', 'Baik', 'Aktif mengikuti kegiatan kepramukaan mingguan dengan disiplin.'] as any);
-  }
+  const resolvedEkskulRows = resolveStudentExtracurricularRows({
+    studentId: student.id,
+    academicYear,
+    semester,
+    extracurriculars,
+    studentExtracurriculars
+  });
+  const ekskulRows = buildPdfExtracurricularTableBody(resolvedEkskulRows);
 
   autoTable(doc, {
     startY: finalY,
@@ -707,9 +719,7 @@ export const generateCompleteReportPDF = async (options: ReportCardExportOptions
 /**
  * B. CETAK ISI RAPOR SAJA (Grades only, without cover and identity pages)
  */
-export const generateSingleReportCardPDF = (options: ReportCardExportOptions) => {
-  const { student, classroom } = options;
-
+export const buildSingleReportCardPDFDoc = (options: ReportCardExportOptions): jsPDF => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -717,6 +727,12 @@ export const generateSingleReportCardPDF = (options: ReportCardExportOptions) =>
   });
 
   buildReportContentPages(doc, options, false);
+  return doc;
+};
+
+export const generateSingleReportCardPDF = (options: ReportCardExportOptions) => {
+  const { student, classroom } = options;
+  const doc = buildSingleReportCardPDFDoc(options);
 
   doc.save(
     `Isi_Rapor_${student.nisn}_${student.name.replace(/\s+/g, '_')}_${classroom.name.replace(/\s+/g, '_')}.pdf`
@@ -744,6 +760,7 @@ export const generateClassBatchReportPDF = async (
     academicYear,
     semester,
     mode = 'complete',
+    teachingAssignments = [],
     kokurikulerGroups = [],
     kokurikulerActivities = [],
     kokurikulerDescriptions = [],
@@ -808,6 +825,7 @@ export const generateClassBatchReportPDF = async (
       homeroomNote: studentNote,
       academicYear,
       semester,
+      teachingAssignments,
       kokurikulerGroups,
       kokurikulerActivities,
       kokurikulerDescriptions,
@@ -1165,4 +1183,187 @@ export const generateKokurikulerReportPDF = (opts: KokurikulerReportPDFOptions) 
 
   doc.save(`Laporan_Kokurikuler_${school.name.replace(/\s+/g, '_')}_${academicYear.replace('/', '-')}_${semester}.pdf`);
 };
+
+export interface ElectiveTranscriptPDFOptions {
+  school: SchoolProfile;
+  student: Student;
+  classroom?: Classroom;
+  classrooms: Classroom[];
+  subjects: Subject[];
+  scores: AssessmentScore[];
+  rows?: ElectiveHistoryRow[];
+  preparedByName?: string;
+  preparedByNip?: string;
+}
+
+export const buildElectiveTranscriptPDFDoc = (opts: ElectiveTranscriptPDFOptions): jsPDF => {
+  const {
+    school,
+    student,
+    classroom,
+    classrooms,
+    subjects,
+    scores,
+    preparedByName,
+    preparedByNip
+  } = opts;
+
+  const historyRows =
+    opts.rows ||
+    getElectiveHistoryRows({
+      student,
+      subjects,
+      scores,
+      classrooms
+    });
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  // Header Sekolah
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('PEMERINTAH KABUPATEN KEPULAUAN MERANTI', pageWidth / 2, 14, { align: 'center' });
+  doc.setFontSize(9.5);
+  doc.text('DINAS PENDIDIKAN DAN KEBUDAYAAN', pageWidth / 2, 19, { align: 'center' });
+  doc.setFontSize(12);
+  doc.text(school.name.toUpperCase(), pageWidth / 2, 25, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(
+    `NPSN: ${school.npsn} • Alamat: ${school.address}, Kec. ${school.kecamatan}, Kab. ${school.kabupaten} - ${school.provinsi}`,
+    pageWidth / 2,
+    29.5,
+    { align: 'center' }
+  );
+
+  doc.setDrawColor(20, 20, 20);
+  doc.setLineWidth(0.6);
+  doc.line(14, 32, pageWidth - 14, 32);
+
+  // Document Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(ELECTIVE_TRANSCRIPT_TITLE, pageWidth / 2, 40, { align: 'center' });
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(8.5);
+  doc.text(
+    ELECTIVE_TRANSCRIPT_SUBTITLE,
+    pageWidth / 2,
+    45,
+    { align: 'center' }
+  );
+
+  // Identity
+  const identityRows = [
+    ['Nama Peserta Didik', ':', student.name, 'NIS / NISN', ':', `${student.nis || '-'} / ${student.nisn || '-'}`],
+    ['Kelas Saat Ini', ':', classroom?.name || '-', 'Tempat, Tgl Lahir', ':', `${student.pob || '-'}, ${student.dob || '-'}`]
+  ];
+
+  autoTable(doc, {
+    startY: 49,
+    body: identityRows,
+    theme: 'plain',
+    styles: { fontSize: 8.5, cellPadding: 1.2, textColor: [20, 20, 20] },
+    columnStyles: {
+      0: { cellWidth: 34 },
+      1: { cellWidth: 4, halign: 'center' },
+      2: { cellWidth: 58, fontStyle: 'bold' },
+      3: { cellWidth: 32 },
+      4: { cellWidth: 4, halign: 'center' },
+      5: { cellWidth: 50, fontStyle: 'bold' }
+    },
+    margin: { left: 14, right: 14 }
+  });
+
+  const tableStartY = (doc as any).lastAutoTable.finalY + 5;
+  const tableBody = buildElectiveTranscriptTableRows(historyRows);
+
+  autoTable(doc, {
+    startY: tableStartY,
+    head: [['No', 'Mata Pelajaran', 'Tahun Ajaran', 'Semester', 'Kelas', 'Nilai Akhir', 'Deskripsi Capaian Kompetensi']],
+    body: tableBody,
+    theme: 'plain',
+    styles: {
+      fontSize: 8,
+      cellPadding: 2,
+      lineColor: [110, 110, 110],
+      lineWidth: 0.1,
+      textColor: [20, 20, 20]
+    },
+    headStyles: {
+      fillColor: [232, 244, 248],
+      textColor: [0, 0, 0],
+      fontStyle: 'bold',
+      halign: 'center'
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { cellWidth: 34, fontStyle: 'bold' },
+      2: { halign: 'center', cellWidth: 21 },
+      3: { halign: 'center', cellWidth: 22 },
+      4: { halign: 'center', cellWidth: 18 },
+      5: { halign: 'center', cellWidth: 15, fontStyle: 'bold' },
+      6: { cellWidth: 64 }
+    },
+    margin: { left: 14, right: 14 }
+  });
+
+  let noteY = (doc as any).lastAutoTable.finalY + 6;
+  if (noteY > 235) {
+    doc.addPage();
+    noteY = 20;
+  }
+
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(180, 190, 205);
+  doc.rect(14, noteY, pageWidth - 28, 16, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('Catatan Penting:', 17, noteY + 5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(
+    ELECTIVE_TRANSCRIPT_DISCLAIMER,
+    17,
+    noteY + 9.5,
+    { maxWidth: pageWidth - 34 }
+  );
+
+  const signY = noteY + 24;
+  doc.setFontSize(8.5);
+  doc.text('Mengetahui,', 18, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Wali Kelas / Guru Pengampu,', 18, signY + 4.5);
+  doc.text(preparedByName || '-', 18, signY + 24);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  if (preparedByNip) {
+    doc.text(`NIP. ${preparedByNip}`, 18, signY + 28);
+  }
+
+  const rightX = pageWidth - 72;
+  doc.setFontSize(8.5);
+  doc.text(`${school.reportPlace || 'Tanjung Samak'}, ${school.reportDate}`, rightX, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Kepala ${school.name},`, rightX, signY + 4.5);
+  doc.text(school.headmasterName, rightX, signY + 24);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`NIP. ${school.headmasterNip}`, rightX, signY + 28);
+
+  return doc;
+};
+
+export const generateElectiveTranscriptPDF = (opts: ElectiveTranscriptPDFOptions) => {
+  const { student } = opts;
+  const doc = buildElectiveTranscriptPDFDoc(opts);
+  doc.save(`Riwayat_Mapel_Pilihan_${student.nisn || student.nis}_${student.name.replace(/\s+/g, '_')}.pdf`);
+};
+
 

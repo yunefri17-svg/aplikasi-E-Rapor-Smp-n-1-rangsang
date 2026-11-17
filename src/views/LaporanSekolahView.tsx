@@ -7,10 +7,12 @@ import {
   Subject,
   AssessmentScore,
   Attendance,
+  TeachingAssignment,
   User
 } from '../types/erapor';
 import { BarChart3, Printer, Users, BookOpen, CheckCircle2, AlertCircle, School, Download } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
+import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
 
 interface LaporanSekolahViewProps {
   school: SchoolProfile;
@@ -20,6 +22,7 @@ interface LaporanSekolahViewProps {
   subjects: Subject[];
   scores: AssessmentScore[];
   attendanceList: Attendance[];
+  teachingAssignments?: TeachingAssignment[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
@@ -33,6 +36,7 @@ export const LaporanSekolahView: React.FC<LaporanSekolahViewProps> = ({
   subjects,
   scores,
   attendanceList,
+  teachingAssignments = [],
   academicYear,
   semester,
   currentUser
@@ -141,7 +145,16 @@ export const LaporanSekolahView: React.FC<LaporanSekolahViewProps> = ({
                     const classScores = scores.filter(
                       (sc) => sc.classId === cls.id && sc.academicYear === academicYear && sc.semester === semester
                     );
-                    const totalRequired = cStudents.length * subjects.length;
+                    const classApplicableSubjects = getSubjectsForClassPeriod({
+                      subjects,
+                      classId: cls.id,
+                      academicYear,
+                      semester,
+                      teachingAssignments,
+                      scores: classScores,
+                      classStudentIds: cStudents.map((s) => s.id)
+                    });
+                    const totalRequired = cStudents.length * classApplicableSubjects.length;
                     const percent = totalRequired > 0 ? Math.round((classScores.length / totalRequired) * 100) : 0;
 
                     return (

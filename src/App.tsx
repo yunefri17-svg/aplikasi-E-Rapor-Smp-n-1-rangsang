@@ -60,6 +60,11 @@ import {
   isPeriodInputLocked,
   normalizeAssessmentPolicy
 } from './utils/tpAnalysisAndDescription';
+import {
+  CODING_SUBJECT_ID,
+  ensureElectiveCodingSubject,
+  isCodingSubject
+} from './utils/electiveSubjectHelper';
 import { Header } from './components/layout/Header';
 import { Sidebar, MenuId } from './components/layout/Sidebar';
 import {
@@ -375,7 +380,19 @@ export default function App() {
         mergeList('students', payload.students);
         mergeList('teachers', payload.teachers);
         mergeList('classrooms', payload.classrooms);
-        mergeList('subjects', payload.subjects);
+        if (payload.subjects !== undefined) {
+          const validIncomingSubjects = (payload.subjects || []).filter(
+            (item) => item && item.id && !isEntityDeleted('subjects', item.id)
+          );
+          const ensuredSubjects = ensureElectiveCodingSubject(
+            validIncomingSubjects,
+            (id) => isEntityDeleted('subjects', id)
+          );
+          if (JSON.stringify(prev.subjects) !== JSON.stringify(ensuredSubjects)) {
+            updated.subjects = ensuredSubjects;
+            changed = true;
+          }
+        }
         mergeList('teachingAssignments', payload.teachingAssignments);
         mergeList('learningObjectives', payload.learningObjectives);
         mergeList('curricula', payload.curricula);
@@ -481,7 +498,12 @@ export default function App() {
                 classrooms: sortClassrooms(
                   remoteData.classrooms !== undefined ? cleanRemoteClassrooms : prev.classrooms.filter(c => !isEntityDeleted('classrooms', c.id))
                 ),
-                subjects: remoteData.subjects !== undefined ? cleanRemoteSubjects : prev.subjects.filter(sub => !isEntityDeleted('subjects', sub.id)),
+                subjects: ensureElectiveCodingSubject(
+                  remoteData.subjects !== undefined
+                    ? cleanRemoteSubjects
+                    : prev.subjects.filter((sub) => !isEntityDeleted('subjects', sub.id)),
+                  (id) => isEntityDeleted('subjects', id)
+                ),
                 curricula: remoteData.curricula && remoteData.curricula.length > 0 ? remoteData.curricula : prev.curricula,
                 learningObjectives: remoteData.learningObjectives && remoteData.learningObjectives.length > 0 ? remoteData.learningObjectives : prev.learningObjectives,
                 scores: remoteData.scores !== undefined ? remoteData.scores : prev.scores,
@@ -498,7 +520,11 @@ export default function App() {
                 kktpConfigs: remoteData.kktpConfigs !== undefined ? remoteData.kktpConfigs : prev.kktpConfigs,
                 finalScoreConfigs: remoteData.finalScoreConfigs !== undefined ? remoteData.finalScoreConfigs : prev.finalScoreConfigs,
                 extracurriculars: remoteData.extracurriculars !== undefined ? remoteData.extracurriculars : prev.extracurriculars,
-                studentExtracurriculars: remoteData.studentExtracurriculars !== undefined ? remoteData.studentExtracurriculars : prev.studentExtracurriculars,
+                studentExtracurriculars: (
+                  remoteData.studentExtracurriculars !== undefined
+                    ? remoteData.studentExtracurriculars
+                    : prev.studentExtracurriculars
+                ).filter((se) => se && se.id && !isEntityDeleted('student_extracurriculars', se.id)),
                 kokurikulerDimensions:
                   remoteData.kokurikulerDimensions && remoteData.kokurikulerDimensions.length > 0
                     ? remoteData.kokurikulerDimensions
@@ -551,6 +577,16 @@ export default function App() {
               });
 
               saveDatabase(cleaned);
+
+              // Ensure Koding dan Kecerdasan Artifisial subject is persisted in Firestore once if not yet present
+              const remoteHasCoding = (remoteData.subjects || []).some((sub) => isCodingSubject(sub));
+              if (!remoteHasCoding && !isEntityDeleted('subjects', CODING_SUBJECT_ID)) {
+                const codingSubject = cleaned.subjects.find((sub) => sub.id === CODING_SUBJECT_ID);
+                if (codingSubject) {
+                  surgicalSync('subjects', codingSubject.id, codingSubject).catch(() => {});
+                }
+              }
+
               return cleaned;
             });
           } else {
@@ -861,6 +897,7 @@ export default function App() {
   };
 
   const handleSaveStudentEkskul = (record: StudentExtracurricular) => {
+    removeDeletedEntityId('student_extracurriculars', record.id);
     updateDbAndSave((prev) => {
       const idx = prev.studentExtracurriculars.findIndex(
         (se) =>
@@ -877,6 +914,44 @@ export default function App() {
       }
       return { ...prev, studentExtracurriculars: list };
     }, false, { collection: 'student_extracurriculars', id: record.id, data: record });
+  };
+
+  const handleSaveStudentEkskulBatch = (
+    recordsToSave: StudentExtracurricular[],
+    recordIdsToDelete: string[]
+  ) => {
+    const deleteIdSet = new Set(recordIdsToDelete);
+    recordsToSave.forEach((rec) => {
+      removeDeletedEntityId('student_extracurriculars', rec.id);
+    });
+    updateDbAndSave((prev) => {
+      const list = prev.studentExtracurriculars.filter((se) => !deleteIdSet.has(se.id));
+      recordsToSave.forEach((rec) => {
+        const idx = list.findIndex(
+          (se) =>
+            (rec.id && se.id === rec.id) ||
+            (se.studentId === rec.studentId &&
+              se.extracurricularId === rec.extracurricularId &&
+              se.academicYear === rec.academicYear &&
+              se.semester === rec.semester)
+        );
+        if (idx >= 0) {
+          list[idx] = rec;
+        } else {
+          list.push(rec);
+        }
+        surgicalSync('student_extracurriculars', rec.id, rec).catch(() => {});
+      });
+      recordIdsToDelete.forEach((id) => {
+        deleteDocFromFirestore('student_extracurriculars', id).catch(() => {});
+      });
+      return { ...prev, studentExtracurriculars: list };
+    }, true);
+    logActivity(
+      currentUser,
+      'Simpan Ekskul Siswa',
+      `Menyimpan ${recordsToSave.length} peserta aktif & menghapus ${recordIdsToDelete.length} data non-peserta.`
+    );
   };
 
   // Handlers for Attendance
@@ -1136,15 +1211,16 @@ export default function App() {
 
   // Handlers for Teaching Assignments (Penugasan Guru Mengajar)
   const handleSaveTeachingAssignments = (assignments: TeachingAssignment[]) => {
-    updateDbAndSave((prev) => {
-      assignments.forEach(ta => {
-        surgicalSync('teaching_assignments', ta.id, ta).catch(() => {});
-      });
-      return {
-        ...prev,
-        teachingAssignments: assignments
-      };
-    }, true);
+    assignments.forEach((ta) => {
+      removeDeletedEntityId('teaching_assignments', ta.id);
+    });
+    updateDbAndSave((prev) => ({
+      ...prev,
+      teachingAssignments: assignments
+    }), true);
+    assignments.forEach((ta) => {
+      surgicalSync('teaching_assignments', ta.id, ta).catch(() => {});
+    });
     logActivity(
       currentUser,
       'Penugasan Guru Mengajar',
@@ -1153,11 +1229,12 @@ export default function App() {
   };
 
   const handleDeleteTeachingAssignment = (assignmentId: string) => {
+    addDeletedEntityId('teaching_assignments', assignmentId);
     deleteDocFromFirestore('teaching_assignments', assignmentId).catch(() => {});
     updateDbAndSave((prev) => ({
       ...prev,
       teachingAssignments: (prev.teachingAssignments || []).filter((a) => a.id !== assignmentId)
-    }));
+    }), true);
     logActivity(
       currentUser,
       'Hapus Penugasan Mengajar',
@@ -1411,7 +1488,11 @@ export default function App() {
   const handleApplyRemoteData = (remoteData: Partial<AppDatabase>) => {
     updateDbAndSave((prev) => ({
       ...prev,
-      ...remoteData
+      ...remoteData,
+      subjects: ensureElectiveCodingSubject(
+        remoteData.subjects || prev.subjects,
+        (id) => isEntityDeleted('subjects', id)
+      )
     }));
     logActivity(currentUser, 'Sinkronisasi Cloud Firestore', 'Memperbarui data lokal dari Cloud Firestore.');
   };
@@ -1786,6 +1867,7 @@ export default function App() {
               teachers={db.teachers}
               subjects={db.subjects}
               classrooms={db.classrooms}
+              students={db.students}
               teachingAssignments={db.teachingAssignments || []}
               onSaveAssignments={handleSaveTeachingAssignments}
               onDeleteAssignment={handleDeleteTeachingAssignment}
@@ -1820,6 +1902,7 @@ export default function App() {
               onSaveExtracurricular={handleSaveExtracurricular}
               onDeleteExtracurricular={handleDeleteExtracurricular}
               onSaveStudentEkskul={handleSaveStudentEkskul}
+              onSaveStudentEkskulBatch={handleSaveStudentEkskulBatch}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
@@ -2100,6 +2183,7 @@ export default function App() {
               subjects={db.subjects}
               students={db.students}
               scores={db.scores}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
@@ -2113,6 +2197,7 @@ export default function App() {
               subjects={db.subjects}
               students={db.students}
               scores={db.scores}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}
@@ -2128,6 +2213,7 @@ export default function App() {
               attendanceList={db.attendance}
               studentExtracurriculars={db.studentExtracurriculars}
               homeroomNotes={db.homeroomNotes}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               onSaveHomeroomNotes={handleSaveHomeroomNotes}
               onNavigateToPrint={handleNavigateToPrint}
               academicYear={db.schoolProfile.activeAcademicYear}
@@ -2182,6 +2268,7 @@ export default function App() {
               studentExtracurriculars={db.studentExtracurriculars}
               homeroomNotes={db.homeroomNotes}
               teachers={db.teachers}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               preselectedStudentId={targetPrintStudentId}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
@@ -2203,6 +2290,7 @@ export default function App() {
                 subjects={db.subjects}
                 scores={db.scores}
                 attendanceList={db.attendance}
+                teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
                 academicYear={db.schoolProfile.activeAcademicYear}
                 semester={db.schoolProfile.activeSemester}
                 currentUser={effectiveUser}

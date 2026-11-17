@@ -11,7 +11,7 @@ import {
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
-import { sortSubjects } from '../utils/subjectSort';
+import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
 import {
   Table,
   CheckCircle2,
@@ -74,11 +74,27 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
   const subjectSummaries = useMemo(() => {
     if (!selectedClassroom || classStudents.length === 0) return [];
 
-    return sortSubjects(db.subjects).map((sub: Subject) => {
-      // Find teacher who teaches this subject in this class
-      const assignedTeacher = db.teachers.find(
-        (t: Teacher) => t.subjectsTaught.includes(sub.id)
+    const classApplicableSubjects = getSubjectsForClassPeriod({
+      subjects: db.subjects,
+      classId: selectedClassroom.id,
+      academicYear: db.schoolProfile.activeAcademicYear,
+      semester: db.schoolProfile.activeSemester,
+      teachingAssignments: db.teachingAssignments || [],
+      scores: db.scores,
+      classStudentIds: classStudents.map((s) => s.id)
+    });
+
+    return classApplicableSubjects.map((sub: Subject) => {
+      // Find teacher assigned to this subject & class first
+      const taMatch = (db.teachingAssignments || []).find(
+        (ta) =>
+          ta.subjectId === sub.id &&
+          ta.classId === selectedClassroom.id &&
+          ta.status !== 'inactive'
       );
+      const assignedTeacher =
+        (taMatch ? db.teachers.find((t: Teacher) => t.id === taMatch.teacherId) : undefined) ||
+        db.teachers.find((t: Teacher) => t.subjectsTaught.includes(sub.id));
 
       // Find scores for this subject & class in current academic year & semester
       const subjectScores = db.scores.filter(
@@ -133,7 +149,7 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
         scores: subjectScores
       };
     });
-  }, [db.subjects, db.teachers, db.scores, db.schoolProfile, selectedClassroom, classStudents]);
+  }, [db.subjects, db.teachers, db.teachingAssignments, db.scores, db.schoolProfile, selectedClassroom, classStudents]);
 
   // Statistics
   const stats = useMemo(() => {
