@@ -41,7 +41,8 @@ import {
   KokurikulerActivity,
   KokurikulerScore,
   KokurikulerDescription,
-  AssessmentPolicyConfig
+  AssessmentPolicyConfig,
+  LearningChapter
 } from './types/erapor';
 import { Calendar } from 'lucide-react';
 import {
@@ -76,6 +77,7 @@ import {
   subscribeToSyncState,
   listenToFirestoreRealtime,
   saveScoresToFirestoreDirect,
+  saveBatchToFirestoreDirect,
   saveKokurikulerScoresDirect,
   saveKokurikulerDescriptionsDirect,
   saveAssessmentPolicyDirect,
@@ -326,9 +328,12 @@ export default function App() {
           const currentList = ((prev[key] as any[]) || []).slice();
 
           // Filter incoming by tombstone list so deleted items are never revived
-          const validIncoming = incoming.filter(
-            (item) => item && item.id && !isEntityDeleted(key as string, item.id)
-          );
+          const validIncoming = incoming.filter((item) => {
+            if (!item || !item.id) return false;
+            if (isEntityDeleted(key as string, item.id)) return false;
+            if (key === 'learningObjectives' && isEntityDeleted('assessments', item.id)) return false;
+            return true;
+          });
 
           if (key === 'classrooms') {
             const sorted = sortClassrooms(validIncoming);
@@ -467,6 +472,13 @@ export default function App() {
               const cleanRemoteSubjects = (remoteData.subjects || []).filter(
                 (sub) => sub && sub.id && !isEntityDeleted('subjects', sub.id)
               );
+              const cleanRemoteObjectives = (remoteData.learningObjectives || []).filter(
+                (tp) =>
+                  tp &&
+                  tp.id &&
+                  !isEntityDeleted('assessments', tp.id) &&
+                  !isEntityDeleted('learningObjectives', tp.id)
+              );
 
               // Background delete of stale tombstoned items still lingering in Firestore
               (remoteData.teachers || []).forEach((t) => {
@@ -489,6 +501,15 @@ export default function App() {
                   deleteDocFromFirestore('subjects', sub.id).catch(() => {});
                 }
               });
+              (remoteData.learningObjectives || []).forEach((tp) => {
+                if (
+                  tp &&
+                  tp.id &&
+                  (isEntityDeleted('assessments', tp.id) || isEntityDeleted('learningObjectives', tp.id))
+                ) {
+                  deleteDocFromFirestore('assessments', tp.id).catch(() => {});
+                }
+              });
 
               const merged: AppDatabase = {
                 ...prev,
@@ -505,7 +526,16 @@ export default function App() {
                   (id) => isEntityDeleted('subjects', id)
                 ),
                 curricula: remoteData.curricula && remoteData.curricula.length > 0 ? remoteData.curricula : prev.curricula,
-                learningObjectives: remoteData.learningObjectives && remoteData.learningObjectives.length > 0 ? remoteData.learningObjectives : prev.learningObjectives,
+                learningObjectives:
+                  remoteData.learningObjectives !== undefined
+                    ? cleanRemoteObjectives
+                    : prev.learningObjectives.filter(
+                        (tp) =>
+                          tp &&
+                          tp.id &&
+                          !isEntityDeleted('assessments', tp.id) &&
+                          !isEntityDeleted('learningObjectives', tp.id)
+                      ),
                 scores: remoteData.scores !== undefined ? remoteData.scores : prev.scores,
                 attendance: remoteData.attendance !== undefined ? remoteData.attendance : prev.attendance,
                 homeroomNotes: remoteData.homeroomNotes !== undefined ? remoteData.homeroomNotes : prev.homeroomNotes,
@@ -852,6 +882,8 @@ export default function App() {
 
   // Handlers for Learning Objectives (TP)
   const handleSaveObjective = (obj: LearningObjective) => {
+    removeDeletedEntityId('assessments', obj.id);
+    removeDeletedEntityId('learningObjectives', obj.id);
     updateDbAndSave((prev) => {
       const idx = prev.learningObjectives.findIndex((o) => o.id === obj.id);
       let newObjectives = [...prev.learningObjectives];
@@ -865,11 +897,17 @@ export default function App() {
     logActivity(currentUser, 'Simpan TP', `Menyimpan Tujuan Pembelajaran: ${obj.code}`);
   };
 
-  const handleDeleteObjective = (objId: string) => {
-    updateDbAndSave((prev) => ({
-      ...prev,
-      learningObjectives: prev.learningObjectives.filter((o) => o.id !== objId)
-    }));
+  const handleDeleteObjective = async (objId: string) => {
+    addDeletedEntityId('assessments', objId);
+    addDeletedEntityId('learningObjectives', objId);
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        learningObjectives: prev.learningObjectives.filter((o) => o.id !== objId)
+      }),
+      true
+    );
+    await deleteDocFromFirestore('assessments', objId);
     logActivity(currentUser, 'Hapus TP', `Menghapus Tujuan Pembelajaran ID: ${objId}`);
   };
 
@@ -1332,6 +1370,69 @@ export default function App() {
   };
 
   // Kurikulum Merdeka 2025 Handlers
+  const handleSaveLearningChapter = (ch: LearningChapter) => {
+    removeDeletedEntityId('summative_chapters', ch.id);
+    updateDbAndSave(
+      (prev) => {
+        const list = (prev.learningChapters || []).filter((item) => item.id !== ch.id);
+        return { ...prev, learningChapters: [...list, ch] };
+      },
+      false,
+      { collection: 'summative_chapters', id: ch.id, data: ch }
+    );
+  };
+
+  const handleDeleteLearningChapter = async (chapterId: string) => {
+    addDeletedEntityId('summative_chapters', chapterId);
+    updateDbAndSave((prev) => ({
+      ...prev,
+      learningChapters: (prev.learningChapters || []).filter((ch) => ch.id !== chapterId)
+    }), true);
+    await deleteDocFromFirestore('summative_chapters', chapterId);
+  };
+
+  const handleSaveFormativesBatch = (items: FormativeAssessment[]) => {
+    updateDbAndSave((prev) => {
+      const map = new Map((prev.formativeAssessments || []).map((a) => [a.id, a]));
+      items.forEach((item) => map.set(item.id, item));
+      return { ...prev, formativeAssessments: Array.from(map.values()) };
+    }, true);
+    saveBatchToFirestoreDirect('formative_assessments', items).catch(() => {});
+  };
+
+  const handleSaveSummativesBatch = (items: SummativeAssessment[]) => {
+    updateDbAndSave((prev) => {
+      const map = new Map((prev.summativeAssessments || []).map((a) => [a.id, a]));
+      items.forEach((item) => map.set(item.id, item));
+      return { ...prev, summativeAssessments: Array.from(map.values()) };
+    }, true);
+    saveBatchToFirestoreDirect('summative_assessments', items).catch(() => {});
+  };
+
+  const handleConfirmExcelImport = (payload: {
+    scoresToSave: AssessmentScore[];
+    summativesToSave: SummativeAssessment[];
+    notificationMessage: string;
+  }) => {
+    const { scoresToSave, summativesToSave } = payload;
+    handleSaveScores(scoresToSave);
+    if (summativesToSave.length > 0) {
+      handleSaveSummativesBatch(summativesToSave);
+    }
+  };
+
+  const handleUpdateSchoolWeights = (babWeight: number, sasWeight: number) => {
+    updateDbAndSave((prev) => {
+      const curriculaList = (prev.curricula || []).map((c) => {
+        if (c.id === 'cur-merdeka' || c.id === prev.curricula[0]?.id) {
+          return { ...c, formatifWeight: babWeight, sumatifWeight: sasWeight };
+        }
+        return c;
+      });
+      return { ...prev, curricula: curriculaList };
+    });
+  };
+
   const handleSaveFormative = (fa: FormativeAssessment) => {
     if (currentUser?.role !== 'admin' && isPeriodInputLocked(db.assessmentPolicy, fa.academicYear, fa.semester)) {
       return;
@@ -1492,6 +1593,16 @@ export default function App() {
       subjects: ensureElectiveCodingSubject(
         remoteData.subjects || prev.subjects,
         (id) => isEntityDeleted('subjects', id)
+      ),
+      learningObjectives: (remoteData.learningObjectives !== undefined
+        ? remoteData.learningObjectives
+        : prev.learningObjectives
+      ).filter(
+        (tp) =>
+          tp &&
+          tp.id &&
+          !isEntityDeleted('assessments', tp.id) &&
+          !isEntityDeleted('learningObjectives', tp.id)
       )
     }));
     logActivity(currentUser, 'Sinkronisasi Cloud Firestore', 'Memperbarui data lokal dari Cloud Firestore.');
@@ -1929,6 +2040,7 @@ export default function App() {
               onSaveKKTP={handleSaveKKTP}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || []}
+              teachers={db.teachers}
             />
           )}
 
@@ -1940,8 +2052,18 @@ export default function App() {
               learningObjectives={db.learningObjectives}
               formativeAssessments={db.formativeAssessments || []}
               onSaveAssessment={handleSaveFormative}
+              onSaveAssessmentsBatch={handleSaveFormativesBatch}
+              onDeleteAssessment={(id) => {
+                addDeletedEntityId('formative_assessments', id);
+                updateDbAndSave((prev) => ({
+                  ...prev,
+                  formativeAssessments: (prev.formativeAssessments || []).filter((a) => a.id !== id)
+                }), true);
+                deleteDocFromFirestore('formative_assessments', id).catch(() => {});
+              }}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || []}
+              teachers={db.teachers}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
@@ -1954,11 +2076,16 @@ export default function App() {
               students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
+              learningChapters={db.learningChapters || []}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               onSaveAssessment={handleSaveSummative}
+              onSaveAssessmentsBatch={handleSaveSummativesBatch}
               onDeleteAssessment={handleDeleteSummative}
+              onSaveLearningChapter={handleSaveLearningChapter}
+              onDeleteLearningChapter={handleDeleteLearningChapter}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              teachers={db.teachers}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
@@ -1971,6 +2098,7 @@ export default function App() {
               students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
+              learningChapters={db.learningChapters || []}
               formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               kktpConfigs={db.kktpConfigs || EMPTY_ARRAY}
@@ -1979,12 +2107,15 @@ export default function App() {
               descriptionBank={db.descriptionBank}
               assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
               onSaveScores={handleSaveScores}
+              onConfirmExcelImport={handleConfirmExcelImport}
               onSaveConfig={handleSaveFinalScoreConfig}
               onNavigateToDescriptions={() => handleSelectMenu('deskripsi-nilai')}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              teachers={db.teachers}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
+              curricula={db.curricula}
             />
           )}
 
@@ -2111,15 +2242,18 @@ export default function App() {
 
           {activeMenu === 'input-nilai' && (
             <InputNilaiView
+              schoolName={db.schoolProfile?.name || 'SMP Negeri 1 Rangsang'}
               classrooms={db.classrooms}
               subjects={db.subjects}
               students={db.students}
               learningObjectives={db.learningObjectives}
+              learningChapters={db.learningChapters || EMPTY_ARRAY}
               scores={db.scores}
               curricula={db.curricula}
               teachers={db.teachers}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               onSaveScores={handleSaveScores}
+              onConfirmExcelImport={handleConfirmExcelImport}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               currentUser={effectiveUser}

@@ -100,6 +100,8 @@ export function hasEnteredAssessmentScore(sc?: AssessmentScore | null): boolean 
       (sc.lowestCompetenceDesc || '').trim()
   );
   if (hasDesc) return true;
+  if (sc.hasSasScore === true) return true;
+  if (sc.chapterScores && Object.keys(sc.chapterScores).length > 0) return true;
   if (typeof sc.finalScore === 'number' && Number.isFinite(sc.finalScore) && sc.finalScore > 0) {
     return true;
   }

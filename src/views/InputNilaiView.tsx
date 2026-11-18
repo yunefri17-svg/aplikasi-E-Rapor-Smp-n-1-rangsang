@@ -8,6 +8,7 @@ import {
   Curriculum,
   FormativeAssessment,
   KKTPConfig,
+  LearningChapter,
   LearningObjective,
   Student,
   Subject,
@@ -16,6 +17,8 @@ import {
   TeachingAssignment,
   User
 } from '../types/erapor';
+import { ReportScoreExcelTab } from '../components/assessment/ReportScoreExcelTab';
+import { resolveSchoolWeights, filterChaptersForContext } from '../utils/assessmentCalculation';
 import {
   FileSpreadsheet,
   Save,
@@ -55,15 +58,22 @@ import {
 } from '../utils/electiveSubjectHelper';
 
 interface InputNilaiViewProps {
+  schoolName?: string;
   classrooms: Classroom[];
   subjects: Subject[];
   students: Student[];
   learningObjectives: LearningObjective[];
+  learningChapters?: LearningChapter[];
   scores: AssessmentScore[];
   curricula: Curriculum[];
   teachers?: Teacher[];
   teachingAssignments?: TeachingAssignment[];
   onSaveScores: (scores: AssessmentScore[], notification?: AppNotification) => void;
+  onConfirmExcelImport?: (payload: {
+    scoresToSave: AssessmentScore[];
+    summativesToSave: SummativeAssessment[];
+    notificationMessage: string;
+  }) => void;
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   currentUser: User;
@@ -86,15 +96,18 @@ const MANUAL_PROTECTED_STATUSES: AssessmentDescriptionStatus[] = [
 ];
 
 export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
+  schoolName,
   classrooms,
   subjects,
   students,
   learningObjectives,
+  learningChapters = [],
   scores,
   curricula,
   teachers = EMPTY_TEACHERS,
   teachingAssignments = EMPTY_ASSIGNMENTS,
   onSaveScores,
+  onConfirmExcelImport,
   academicYear,
   semester,
   currentUser,
@@ -110,6 +123,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   const isLocked =
     currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
   const isReadOnly = isLocked || isWaliKelasReadOnly;
+
+  const [activeInputTab, setActiveInputTab] = useState<'input' | 'excel'>('input');
 
   const currentTeacher = useMemo(() => {
     return teachers.find(
@@ -1185,7 +1200,58 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl">
+          <button
+            onClick={() => setActiveInputTab('input')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeInputTab === 'input' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Input Nilai Rapor
+          </button>
+          <button
+            onClick={() => setActiveInputTab('excel')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeInputTab === 'excel' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Pengisian Nilai (Excel)
+          </button>
+        </div>
+      </div>
+
+      {activeInputTab === 'excel' && (
+        <ReportScoreExcelTab
+          schoolName={schoolName || 'SMP Negeri 1 Rangsang'}
+          academicYear={academicYear}
+          semester={semester}
+          subject={currentSubjectObj || subjects[0]}
+          classroom={currentClass || classrooms[0]}
+          students={classStudents}
+          chapters={filterChaptersForContext(learningChapters || [], {
+            subjectId: selectedSubject,
+            classId: selectedClass,
+            academicYear,
+            semester
+          })}
+          scores={scores}
+          summativeAssessments={summativeAssessments}
+          weights={resolveSchoolWeights(curricula)}
+          currentUser={currentUser}
+          isReadOnly={isReadOnly}
+          onConfirmImport={(payload) => {
+            if (onConfirmExcelImport) {
+              onConfirmExcelImport(payload);
+            } else {
+              onSaveScores(payload.scoresToSave);
+            }
+          }}
+        />
+      )}
+
+      {activeInputTab === 'input' && (
+        <>
+        <div className="space-y-6">
           {saveSuccess && (
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold animate-in fade-in">
               <Check className="w-4 h-4" />
@@ -1230,7 +1296,6 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
             Simpan Data Nilai
           </button>
         </div>
-      </div>
 
       {isLocked && (
         <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2.5">
@@ -2073,6 +2138,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

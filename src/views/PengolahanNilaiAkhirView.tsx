@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   AssessmentPolicyConfig,
   AssessmentScore,
@@ -6,14 +6,19 @@ import {
   FinalScoreMethod,
   FormativeAssessment,
   KKTPConfig,
+  LearningChapter,
   LearningObjective,
   Student,
   Subject,
   SubjectFinalScoreConfig,
   SummativeAssessment,
+  Teacher,
   TeachingAssignment,
-  User
+  User,
+  Curriculum
 } from '../types/erapor';
+import { ReportScoreExcelTab } from '../components/assessment/ReportScoreExcelTab';
+import { resolveSchoolWeights, filterChaptersForContext } from '../utils/assessmentCalculation';
 import {
   Calculator,
   TrendingUp,
@@ -23,7 +28,8 @@ import {
   Settings,
   Lock,
   ArrowRight,
-  AlertTriangle
+  AlertTriangle,
+  FileSpreadsheet
 } from 'lucide-react';
 import { getAccessibleClassrooms, getAccessibleStudents, calculatePredicate } from '../services/storage';
 import { SubjectDescriptionBank } from '../utils/descriptionBank';
@@ -34,12 +40,16 @@ import {
   getSummativeTpIds,
   isPeriodInputLocked
 } from '../utils/tpAnalysisAndDescription';
+import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
+import { sortClassrooms } from '../utils/classroomSort';
 
 interface PengolahanNilaiAkhirViewProps {
   classrooms: Classroom[];
   students: Student[];
   subjects: Subject[];
   learningObjectives: LearningObjective[];
+  learningChapters?: LearningChapter[];
+  curricula?: Curriculum[];
   formativeAssessments?: FormativeAssessment[];
   summativeAssessments: SummativeAssessment[];
   kktpConfigs: KKTPConfig[];
@@ -48,10 +58,16 @@ interface PengolahanNilaiAkhirViewProps {
   descriptionBank?: SubjectDescriptionBank[];
   assessmentPolicy?: AssessmentPolicyConfig;
   onSaveScores: (scores: AssessmentScore[]) => void;
+  onConfirmExcelImport?: (payload: {
+    scoresToSave: AssessmentScore[];
+    summativesToSave: SummativeAssessment[];
+    notificationMessage: string;
+  }) => void;
   onSaveConfig: (config: SubjectFinalScoreConfig) => void;
   onNavigateToDescriptions?: () => void;
   currentUser: User;
   teachingAssignments: TeachingAssignment[];
+  teachers?: Teacher[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
 }
@@ -61,6 +77,8 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
   students,
   subjects,
   learningObjectives,
+  learningChapters = [],
+  curricula = [],
   formativeAssessments = [],
   summativeAssessments,
   kktpConfigs,
@@ -69,37 +87,56 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
   descriptionBank,
   assessmentPolicy,
   onSaveScores,
+  onConfirmExcelImport,
   onSaveConfig,
   onNavigateToDescriptions,
   currentUser,
   teachingAssignments,
+  teachers = [],
   academicYear,
   semester
 }) => {
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
   const isWaliKelasReadOnly = currentUser.role === 'walikelas';
   const isLocked =
     currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
   const isReadOnly = isLocked || isWaliKelasReadOnly;
 
+  const [activeTab, setActiveTab] = useState<'calc' | 'excel'>('calc');
+
   // 1. Visible Classrooms & Subjects
   const visibleClassrooms = useMemo(
-    () => getAccessibleClassrooms(currentUser, classrooms),
+    () => sortClassrooms(getAccessibleClassrooms(currentUser, classrooms)),
     [currentUser, classrooms]
   );
   const visibleSubjects = useMemo(() => {
-    if (isAdmin || isWaliKelasReadOnly) return subjects;
-    const assignedIds = teachingAssignments
-      .filter((ta) => ta.teacherId === currentUser.teacherId && ta.status === 'active')
-      .map((ta) => ta.subjectId);
-    return subjects.filter((s) => assignedIds.includes(s.id));
-  }, [subjects, teachingAssignments, currentUser, isAdmin, isWaliKelasReadOnly]);
+    return getVisibleSubjectsForUser({
+      currentUser,
+      subjects,
+      teachingAssignments,
+      teachers,
+      includeAllForWaliKelas: true
+    });
+  }, [subjects, teachingAssignments, teachers, currentUser]);
 
   // 2. Selection State
   const [selectedClassId, setSelectedClassId] = useState(visibleClassrooms[0]?.id || '');
   const [selectedSubjectId, setSelectedSubjectId] = useState(visibleSubjects[0]?.id || '');
   const [showConfig, setShowConfig] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    if (visibleClassrooms.length > 0 && !visibleClassrooms.some((c) => c.id === selectedClassId)) {
+      setSelectedClassId(visibleClassrooms[0].id);
+    }
+  }, [visibleClassrooms, selectedClassId]);
+
+  useEffect(() => {
+    if (visibleSubjects.length > 0 && !visibleSubjects.some((s) => s.id === selectedSubjectId)) {
+      setSelectedSubjectId(visibleSubjects[0].id);
+    } else if (visibleSubjects.length === 0 && selectedSubjectId !== '') {
+      setSelectedSubjectId('');
+    }
+  }, [visibleSubjects, selectedSubjectId]);
 
   const selectedClassroom = useMemo(
     () => classrooms.find((c) => c.id === selectedClassId),
@@ -355,35 +392,63 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {onNavigateToDescriptions && (
-            <button
-              onClick={onNavigateToDescriptions}
-              className="px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold text-xs flex items-center gap-1.5 transition"
-            >
-              Kelola Deskripsi Rapor Otomatis
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          )}
+        <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl">
           <button
-            onClick={() => setShowConfig(!showConfig)}
-            disabled={isReadOnly}
-            className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs flex items-center gap-2 transition"
+            onClick={() => setActiveTab('calc')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'calc' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
           >
-            <Settings className="w-3.5 h-3.5" />
-            Metode Perhitungan
+            <Calculator className="w-3.5 h-3.5" /> Kalkulasi Nilai
+          </button>
+          <button
+            onClick={() => setActiveTab('excel')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'excel' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Pengisian Nilai (Excel)
           </button>
         </div>
       </div>
 
-      {isLocked && (
-        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2.5">
-          <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-          <span>
-            <strong>Periode Terkunci ({academicYear} {semester}):</strong> Perubahan metode atau posting nilai dikunci sementara oleh Administrator.
-          </span>
-        </div>
-      )}
+      {activeTab === 'excel' ? (
+        <ReportScoreExcelTab
+          schoolName={'SMP Negeri 1 Rangsang'}
+          academicYear={academicYear}
+          semester={semester}
+          subject={subjects.find((s) => s.id === selectedSubjectId) || subjects[0]}
+          classroom={selectedClassroom || classrooms[0]}
+          students={filteredStudents}
+          chapters={filterChaptersForContext(learningChapters || [], {
+            subjectId: selectedSubjectId,
+            classId: selectedClassId,
+            academicYear,
+            semester
+          })}
+          scores={scores}
+          summativeAssessments={summativeAssessments}
+          weights={resolveSchoolWeights(curricula)}
+          currentUser={currentUser}
+          isReadOnly={isReadOnly}
+          onConfirmImport={(payload) => {
+            if (onConfirmExcelImport) {
+              onConfirmExcelImport(payload);
+            } else {
+              onSaveScores(payload.scoresToSave);
+            }
+          }}
+        />
+      ) : (
+        <>
+          {isLocked && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2.5">
+              <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>
+                <strong>Periode Terkunci ({academicYear} {semester}):</strong> Perubahan metode atau posting nilai dikunci sementara oleh Administrator.
+              </span>
+            </div>
+          )}
 
       {/* Filter & Config Bar */}
       <div className="space-y-4">
@@ -644,6 +709,8 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           )}
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 };

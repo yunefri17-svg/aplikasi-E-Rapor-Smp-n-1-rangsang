@@ -8,6 +8,7 @@ import {
   LearningObjective,
   Student,
   Subject,
+  Teacher,
   TeachingAssignment,
   User
 } from '../types/erapor';
@@ -23,7 +24,10 @@ import {
   Clock,
   History,
   Target,
-  Lock
+  Lock,
+  Trash2,
+  Edit3,
+  X
 } from 'lucide-react';
 import { getAccessibleClassrooms, getAccessibleStudents } from '../services/storage';
 import {
@@ -31,6 +35,8 @@ import {
   getFormativeTpIds,
   isPeriodInputLocked
 } from '../utils/tpAnalysisAndDescription';
+import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
+import { sortClassrooms } from '../utils/classroomSort';
 
 interface AsesmenFormatifViewProps {
   classrooms: Classroom[];
@@ -39,8 +45,11 @@ interface AsesmenFormatifViewProps {
   learningObjectives: LearningObjective[];
   formativeAssessments: FormativeAssessment[];
   onSaveAssessment: (assessment: FormativeAssessment) => void;
+  onSaveAssessmentsBatch?: (assessments: FormativeAssessment[]) => void;
+  onDeleteAssessment: (id: string) => void;
   currentUser: User;
   teachingAssignments: TeachingAssignment[];
+  teachers?: Teacher[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   assessmentPolicy?: AssessmentPolicyConfig;
@@ -53,36 +62,52 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
   learningObjectives,
   formativeAssessments,
   onSaveAssessment,
+  onSaveAssessmentsBatch,
+  onDeleteAssessment,
   currentUser,
   teachingAssignments,
+  teachers = [],
   academicYear,
   semester,
   assessmentPolicy
 }) => {
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
   const isWaliKelasReadOnly = currentUser.role === 'walikelas';
   const isLocked =
     currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
   const isReadOnly = isLocked || isWaliKelasReadOnly;
 
-  // 1. Visible Classrooms & Subjects
   const visibleClassrooms = useMemo(
-    () => getAccessibleClassrooms(currentUser, classrooms),
+    () => sortClassrooms(getAccessibleClassrooms(currentUser, classrooms)),
     [currentUser, classrooms]
   );
   const visibleSubjects = useMemo(() => {
-    if (isAdmin || isWaliKelasReadOnly) return subjects;
-    const assignedIds = teachingAssignments
-      .filter((ta) => ta.teacherId === currentUser.teacherId && ta.status === 'active')
-      .map((ta) => ta.subjectId);
-    return subjects.filter((s) => assignedIds.includes(s.id));
-  }, [subjects, teachingAssignments, currentUser, isAdmin, isWaliKelasReadOnly]);
+    return getVisibleSubjectsForUser({
+      currentUser,
+      subjects,
+      teachingAssignments,
+      teachers,
+      includeAllForWaliKelas: true
+    });
+  }, [subjects, teachingAssignments, teachers, currentUser]);
 
-  // 2. Selection State
   const [selectedClassId, setSelectedClassId] = useState(visibleClassrooms[0]?.id || '');
   const [selectedSubjectId, setSelectedSubjectId] = useState(visibleSubjects[0]?.id || '');
   const [selectedTpIds, setSelectedTpIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'input' | 'history'>('input');
+
+  useEffect(() => {
+    if (visibleClassrooms.length > 0 && !visibleClassrooms.some((c) => c.id === selectedClassId)) {
+      setSelectedClassId(visibleClassrooms[0].id);
+    }
+  }, [visibleClassrooms, selectedClassId]);
+
+  useEffect(() => {
+    if (visibleSubjects.length > 0 && !visibleSubjects.some((s) => s.id === selectedSubjectId)) {
+      setSelectedSubjectId(visibleSubjects[0].id);
+    } else if (visibleSubjects.length === 0 && selectedSubjectId !== '') {
+      setSelectedSubjectId('');
+    }
+  }, [visibleSubjects, selectedSubjectId]);
 
   const selectedClassroom = useMemo(
     () => classrooms.find((c) => c.id === selectedClassId),
@@ -110,7 +135,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
     });
   }, [relevantObjectives]);
 
-  // 3. Input State
+  // Input State
   const [assessmentDate, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [technique, setTechnique] = useState<FormativeTechnique>('observasi');
   const [masteryStatuses, setMasteryStatuses] = useState<Record<string, FormativeMasteryStatus | ''>>({});
@@ -118,6 +143,9 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
   const [observations, setObservations] = useState<Record<string, string>>({});
   const [feedbacks, setFeedbacks] = useState<Record<string, string>>({});
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Edit Modal State
+  const [editingAssessment, setEditingAssessment] = useState<FormativeAssessment | null>(null);
 
   const toggleTpSelection = (tpId: string) => {
     setSelectedTpIds((prev) =>
@@ -127,11 +155,9 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
 
   const handleSaveAll = () => {
     if (isReadOnly) return;
-    if (selectedTpIds.length === 0) {
-      return;
-    }
+    if (selectedTpIds.length === 0) return;
 
-    let savedCount = 0;
+    const batchList: FormativeAssessment[] = [];
     filteredStudents.forEach((std) => {
       const mStatus = masteryStatuses[std.id];
       const diagScore = diagnosticScores[std.id];
@@ -157,14 +183,22 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
           semester,
           updatedAt: new Date().toISOString()
         };
-        onSaveAssessment(assessment);
-        savedCount++;
+        batchList.push(assessment);
       }
     });
 
-    if (savedCount > 0) {
+    if (batchList.length > 0) {
+      if (onSaveAssessmentsBatch) {
+        onSaveAssessmentsBatch(batchList);
+      } else {
+        batchList.forEach((a) => onSaveAssessment(a));
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
+      setMasteryStatuses({});
+      setDiagnosticScores({});
+      setObservations({});
+      setFeedbacks({});
     }
   };
 
@@ -190,6 +224,12 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [formativeAssessments, selectedClassId, selectedSubjectId, academicYear, semester]);
 
+  const handleUpdateEditingAssessment = () => {
+    if (!editingAssessment || isReadOnly) return;
+    onSaveAssessment(editingAssessment);
+    setEditingAssessment(null);
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Page Header */}
@@ -197,10 +237,10 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
         <div>
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
             <ClipboardCheck className="w-5 h-5 text-emerald-600" />
-            Asesmen Formatif
+            Asesmen Formatif (Berbasis Tujuan Pembelajaran)
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Pantau perkembangan belajar siswa per Tujuan Pembelajaran sebagai bukti penyusunan deskripsi rapor tanpa mengubah bobot nilai angka.
+            Catat perkembangan belajar siswa berdasarkan Tujuan Pembelajaran (TP) dengan skor angka (0–100), status ketercapaian, pengamatan, dan umpan balik.
           </p>
         </div>
 
@@ -287,7 +327,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
           {viewMode === 'input' && (
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1">
-                Tanggal & Teknik
+                Tanggal &amp; Teknik
               </label>
               <div className="flex gap-2">
                 <input
@@ -315,7 +355,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
         {viewMode === 'input' && (
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-[10px] font-bold text-slate-600 uppercase mb-2">
-              Tautkan Tujuan Pembelajaran (TP) yang Benar-Benar Dinilai ({selectedTpIds.length} dipilih):
+              Pilih Tujuan Pembelajaran (TP) yang Dinilai ({selectedTpIds.length} dipilih):
             </label>
             {relevantObjectives.length === 0 ? (
               <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
@@ -365,9 +405,9 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
                   <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-10 text-center">NO</th>
                   <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">NAMA PESERTA DIDIK</th>
                   <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-44">STATUS KETERCAPAIAN TP</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-24 text-center">SKOR OPSIONAL</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[200px]">HASIL PENGAMATAN</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[200px]">UMPAN BALIK PERBAIKAN</th>
+                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-28 text-center">NILAI (0–100)</th>
+                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">HASIL PENGAMATAN</th>
+                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">UMPAN BALIK PERBAIKAN</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -383,7 +423,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
                       <td className="px-3 py-3 text-center text-xs font-medium text-slate-400">{idx + 1}</td>
                       <td className="px-3 py-3">
                         <div className="font-bold text-slate-700 text-xs">{std.name}</div>
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">{std.nisn}</div>
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">{std.nisn || std.nis}</div>
                       </td>
                       <td className="px-3 py-3">
                         <select
@@ -409,21 +449,28 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
                           min={0}
                           max={100}
                           disabled={isReadOnly}
-                          placeholder="--"
+                          placeholder="0-100"
                           value={diagnosticScores[std.id] ?? ''}
                           onChange={(e) => {
                             const raw = e.target.value;
                             const parsed =
                               raw === '' ? undefined : Math.min(100, Math.max(0, Number(raw)));
-                            setDiagnosticScores({ ...diagnosticScores, [std.id]: parsed });
+                            const nextScores = { ...diagnosticScores, [std.id]: parsed };
+                            setDiagnosticScores(nextScores);
+                            // Auto suggest mastery status based on score if not manually set
+                            if (parsed !== undefined && !masteryStatuses[std.id]) {
+                              const autoStatus: FormativeMasteryStatus =
+                                parsed >= 85 ? 'Tercapai Optimal' : parsed >= 75 ? 'Tercapai Baik' : 'Perlu Penguatan';
+                              setMasteryStatuses({ ...masteryStatuses, [std.id]: autoStatus });
+                            }
                           }}
-                          className="w-16 px-2 py-1.5 text-center text-xs font-bold rounded-lg border border-slate-300 focus:border-emerald-500 outline-none disabled:bg-slate-100"
+                          className="w-20 px-2.5 py-1.5 text-center text-xs font-black rounded-lg border border-slate-300 focus:border-emerald-500 outline-none disabled:bg-slate-100 text-emerald-800 bg-white"
                         />
                       </td>
                       <td className="px-3 py-3">
                         <textarea
                           disabled={isReadOnly}
-                          placeholder="Catat kemajuan atau kendala belajar..."
+                          placeholder="Catat kemajuan atau kendala..."
                           value={observations[std.id] || ''}
                           onChange={(e) => setObservations({ ...observations, [std.id]: e.target.value })}
                           className="w-full p-2 text-xs rounded-lg border border-slate-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none resize-none transition-all h-14 disabled:bg-slate-100"
@@ -449,7 +496,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
             <div className="flex items-center gap-2 text-[11px] text-slate-500">
               <Info className="w-4 h-4 text-blue-500 shrink-0" />
               <span>
-                Data kosong tidak dianggap nol. Baris akan tersimpan jika status TP, skor diagnostik, pengamatan, atau umpan balik diisi.
+                Data kosong tidak dianggap nol. Baris disimpan jika status TP, skor (0-100), pengamatan, atau umpan balik diisi.
               </span>
             </div>
             <button
@@ -497,85 +544,197 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
                 return (
                   <div
                     key={item.id}
-                    className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group"
+                    className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group flex flex-col justify-between"
                   >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                          <Calendar className="w-3.5 h-3.5" />
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
+                            <Calendar className="w-3.5 h-3.5" />
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">{item.date}</span>
                         </div>
-                        <span className="text-[10px] font-bold text-slate-500 uppercase">{item.date}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {item.masteryStatus && (
-                          <span
-                            className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
-                              item.masteryStatus === 'Tercapai Optimal'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : item.masteryStatus === 'Tercapai Baik'
-                                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                : 'bg-amber-50 text-amber-700 border-amber-200'
-                            }`}
-                          >
-                            {item.masteryStatus}
-                          </span>
-                        )}
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[9px] font-bold uppercase tracking-wider border border-slate-200">
-                          {item.technique}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="mb-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-[11px] font-bold text-slate-800">{std?.name || 'Siswa'}</div>
-                        {typeof item.score === 'number' && (
-                          <span className="text-[10px] font-mono font-bold text-emerald-700">
-                            Skor: {item.score}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                        <Target className="w-3 h-3 text-blue-500 shrink-0" />
-                        {linkedTps.length > 0 ? (
-                          linkedTps.map((tp) => (
+                        <div className="flex items-center gap-1.5">
+                          {item.masteryStatus && (
                             <span
-                              key={tp.id}
-                              className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-bold"
-                              title={tp.description}
+                              className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
+                                item.masteryStatus === 'Tercapai Optimal'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : item.masteryStatus === 'Tercapai Baik'
+                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              }`}
                             >
-                              {tp.code}
+                              {item.masteryStatus}
                             </span>
-                          ))
-                        ) : (
-                          <span className="text-[10px] text-slate-400">TP: {item.tpId}</span>
+                          )}
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[9px] font-bold uppercase tracking-wider border border-slate-200">
+                            {item.technique}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-bold text-slate-800">{std?.name || 'Siswa'}</div>
+                          {typeof item.score === 'number' && (
+                            <span className="text-[11px] font-mono font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              Nilai: {item.score}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                          <Target className="w-3 h-3 text-blue-500 shrink-0" />
+                          {linkedTps.length > 0 ? (
+                            linkedTps.map((tp) => (
+                              <span
+                                key={tp.id}
+                                className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-bold"
+                                title={tp.description}
+                              >
+                                {tp.code}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-[10px] text-slate-400">TP: {item.tpId}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-3 border-t border-slate-100">
+                        {item.observation && (
+                          <div className="space-y-1">
+                            <div className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                              <UserCheck className="w-3 h-3" /> Pengamatan
+                            </div>
+                            <p className="text-xs text-slate-700 leading-relaxed italic">"{item.observation}"</p>
+                          </div>
+                        )}
+                        {item.feedback && (
+                          <div className="space-y-1">
+                            <div className="text-[9px] font-bold text-emerald-500 uppercase flex items-center gap-1">
+                              <MessageSquare className="w-3 h-3" /> Umpan Balik
+                            </div>
+                            <p className="text-xs text-slate-600 leading-relaxed font-medium">{item.feedback}</p>
+                          </div>
                         )}
                       </div>
                     </div>
 
-                    <div className="space-y-2 pt-3 border-t border-slate-100">
-                      {item.observation && (
-                        <div className="space-y-1">
-                          <div className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                            <UserCheck className="w-3 h-3" /> Hasil Pengamatan
-                          </div>
-                          <p className="text-xs text-slate-700 leading-relaxed italic">"{item.observation}"</p>
-                        </div>
-                      )}
-                      {item.feedback && (
-                        <div className="space-y-1">
-                          <div className="text-[9px] font-bold text-emerald-500 uppercase flex items-center gap-1">
-                            <MessageSquare className="w-3 h-3" /> Umpan Balik
-                          </div>
-                          <p className="text-xs text-slate-600 leading-relaxed font-medium">{item.feedback}</p>
-                        </div>
-                      )}
-                    </div>
+                    {!isReadOnly && (
+                      <div className="flex items-center justify-end gap-1 pt-3 mt-3 border-t border-slate-100">
+                        <button
+                          onClick={() => setEditingAssessment(item)}
+                          className="px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-blue-100 transition"
+                        >
+                          <Edit3 className="w-3 h-3" /> Edit
+                        </button>
+                        <button
+                          onClick={() => onDeleteAssessment(item.id)}
+                          className="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-rose-100 transition"
+                        >
+                          <Trash2 className="w-3 h-3" /> Hapus
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Formative Modal */}
+      {editingAssessment && (
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-sm text-slate-900">Edit Asesmen Formatif</h3>
+              <button
+                onClick={() => setEditingAssessment(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Status Ketercapaian TP</label>
+                <select
+                  value={editingAssessment.masteryStatus || ''}
+                  onChange={(e) =>
+                    setEditingAssessment({
+                      ...editingAssessment,
+                      masteryStatus: (e.target.value as FormativeMasteryStatus) || undefined
+                    })
+                  }
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold outline-none"
+                >
+                  <option value="">-- Pilih Status --</option>
+                  <option value="Tercapai Optimal">Tercapai Optimal</option>
+                  <option value="Tercapai Baik">Tercapai Baik</option>
+                  <option value="Perlu Penguatan">Perlu Penguatan</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Skor Angka (0–100)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={editingAssessment.score ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const val = raw === '' ? undefined : Math.min(100, Math.max(0, Number(raw)));
+                    setEditingAssessment({ ...editingAssessment, score: val });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Hasil Pengamatan</label>
+                <textarea
+                  rows={3}
+                  value={editingAssessment.observation || ''}
+                  onChange={(e) =>
+                    setEditingAssessment({ ...editingAssessment, observation: e.target.value })
+                  }
+                  className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Umpan Balik</label>
+                <textarea
+                  rows={3}
+                  value={editingAssessment.feedback || ''}
+                  onChange={(e) =>
+                    setEditingAssessment({ ...editingAssessment, feedback: e.target.value })
+                  }
+                  className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 text-xs">
+              <button
+                onClick={() => setEditingAssessment(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 font-semibold"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleUpdateEditingAssessment}
+                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold"
+              >
+                Simpan Perubahan
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

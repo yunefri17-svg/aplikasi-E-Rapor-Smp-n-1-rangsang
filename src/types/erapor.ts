@@ -154,6 +154,24 @@ export interface LearningObjective {
   updatedAt?: string;
 }
 
+export interface LearningChapter {
+  id: string;
+  code: string; // e.g. "BAB 1"
+  orderIndex: number; // 1, 2, 3...
+  title: string; // e.g. "Bilangan Bulat"
+  description?: string;
+  subjectId: string;
+  classId: string;
+  gradeLevel: '7' | '8' | '9';
+  teacherId: string;
+  academicYear: string;
+  semester: 'Ganjil' | 'Genap';
+  linkedTpIds?: string[]; // Optional TPs covered in this BAB for rapor description evidence
+  isLocked?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type TPAttainmentStatus =
   | 'tercapai_optimal'
   | 'tercapai_baik'
@@ -196,7 +214,15 @@ export interface AssessmentScore {
   semesterId?: string;
   formatifScores: Record<string, number>; // TP ID -> Score 0-100
   sumatifMateriScores: Record<string, number>; // TP / Scope -> Score 0-100
+  chapterScores?: Record<string, number>; // LearningChapter ID -> Score 0-100
   sumatifAkhirSemester: number; // Test score SAS/ASAS
+  hasSasScore?: boolean; // Distinguishes explicit 0 SAS from blank/unentered SAS
+  babAverage?: number; // Computed average of filled BAB scores
+  babWeightPercent?: number; // Effective BAB weight % used in calculation
+  sasWeightPercent?: number; // Effective SAS weight % used in calculation
+  finalScoreBreakdown?: string; // Transparent calculation breakdown text
+  hasMissingComponents?: boolean; // True when any BAB or SAS is still empty
+  missingComponentNote?: string; // Warning note detailing missing BABs / SAS
   finalScore: number;
   predicate: 'A' | 'B' | 'C' | 'D';
   highestCompetenceDesc: string;
@@ -327,9 +353,12 @@ export interface SummativeAssessment {
   teacherId: string;
   subjectId: string;
   classId: string;
-  tpId: string; // Primary TP ID (backward compatible)
+  chapterId?: string; // Primary BAB Materi ID (Requirement B)
+  chapterCode?: string; // e.g. "BAB 1"
+  chapterTitle?: string; // e.g. "Bilangan Bulat"
+  tpId: string; // Primary TP ID or chapter fallback (backward compatible with Firestore rules)
   tpIds?: string[]; // Supports 1 assessment covering multiple TPs
-  assessmentTitle?: string; // e.g. "UH 1 Teks Deskripsi" or "Proyek Ekosistem"
+  assessmentTitle?: string; // e.g. "BAB 1 - Bilangan Bulat" or "UH 1 Teks Deskripsi"
   date: string;
   technique: SummativeTechnique;
   score: number;

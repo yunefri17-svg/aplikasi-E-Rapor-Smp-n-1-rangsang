@@ -254,6 +254,12 @@ service cloud.firestore {
         )
         && (!('selectedOptimalTpIds' in data) || data.selectedOptimalTpIds is list)
         && (!('selectedImprovementTpIds' in data) || data.selectedImprovementTpIds is list)
+        && (!('chapterScores' in data) || data.chapterScores is map)
+        && (!('hasSasScore' in data) || data.hasSasScore is bool)
+        && (!('babAverage' in data) || data.babAverage == null || isValidScoreNumber(data.babAverage))
+        && (!('hasMissingComponents' in data) || data.hasMissingComponents is bool)
+        && (!('finalScoreBreakdown' in data) || data.finalScoreBreakdown == null || isStrBounded(data.finalScoreBreakdown, 0, 500))
+        && (!('missingComponentNote' in data) || data.missingComponentNote == null || isStrBounded(data.missingComponentNote, 0, 500))
         && (!('manualFinalScore' in data) || data.manualFinalScore == null || isValidScoreNumber(data.manualFinalScore));
     }
 
@@ -286,8 +292,33 @@ service cloud.firestore {
         && isStrBounded(data.classId, 1, 128)
         && isStrBounded(data.tpId, 1, 128)
         && isValidScoreNumber(data.score)
+        && (!('chapterId' in data) || data.chapterId == null || isStrBounded(data.chapterId, 0, 128))
+        && (!('chapterCode' in data) || data.chapterCode == null || isStrBounded(data.chapterCode, 0, 40))
+        && (!('chapterTitle' in data) || data.chapterTitle == null || isStrBounded(data.chapterTitle, 0, 250))
         && isStrBounded(data.academicYear, 4, 20)
         && isValidSemester(data.semester)
+        && isStrBounded(data.updatedAt, 4, 64);
+    }
+
+    function isValidLearningChapterDoc(data) {
+      return data.keys().hasAll([
+          'id', 'code', 'orderIndex', 'title', 'subjectId', 'classId',
+          'gradeLevel', 'teacherId', 'academicYear', 'semester', 'createdAt', 'updatedAt'
+        ])
+        && isStrBounded(data.id, 1, 256)
+        && isStrBounded(data.code, 1, 40)
+        && data.orderIndex is number && data.orderIndex >= 1 && data.orderIndex <= 100
+        && isStrBounded(data.title, 1, 250)
+        && (!('description' in data) || data.description == null || isStrBounded(data.description, 0, 1000))
+        && isStrBounded(data.subjectId, 1, 128)
+        && isStrBounded(data.classId, 1, 128)
+        && isStrBounded(data.gradeLevel, 1, 8)
+        && isStrBounded(data.teacherId, 1, 128)
+        && isStrBounded(data.academicYear, 4, 20)
+        && isValidSemester(data.semester)
+        && (!('linkedTpIds' in data) || data.linkedTpIds is list)
+        && (!('isLocked' in data) || data.isLocked is bool)
+        && isStrBounded(data.createdAt, 4, 64)
         && isStrBounded(data.updatedAt, 4, 64);
     }
 
@@ -328,6 +359,24 @@ service cloud.firestore {
         && isValidFormativeDoc(request.resource.data)
         && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
       allow delete: if isStrBounded(docId, 1, 256)
+        && (
+          !('academicYear' in resource.data)
+          || !('semester' in resource.data)
+          || isAssessmentPeriodUnlocked(resource.data.academicYear, resource.data.semester)
+        );
+    }
+
+    match /summative_chapters/{chapterId} {
+      allow read: if true;
+      allow create: if isStrBounded(chapterId, 1, 256)
+        && isValidLearningChapterDoc(request.resource.data)
+        && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
+      allow update: if isStrBounded(chapterId, 1, 256)
+        && isValidLearningChapterDoc(request.resource.data)
+        && resource.data.get('isLocked', false) != true
+        && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester);
+      allow delete: if isStrBounded(chapterId, 1, 256)
+        && resource.data.get('isLocked', false) != true
         && (
           !('academicYear' in resource.data)
           || !('semester' in resource.data)

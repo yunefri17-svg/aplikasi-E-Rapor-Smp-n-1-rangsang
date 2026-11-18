@@ -243,6 +243,31 @@
         "write": "isAdmin() || isOperator() || isGuru()"
       }
     },
+    "LearningChapter": {
+      "description": "Daftar BAB Materi semester yang digunakan pada Asesmen Sumatif dan Pengisian Nilai Rapor",
+      "collectionName": "summative_chapters",
+      "fields": {
+        "id": { "type": "string", "description": "ID unik BAB materi", "required": true },
+        "code": { "type": "string", "description": "Kode urut BAB misal BAB 1", "required": true },
+        "orderIndex": { "type": "number", "description": "Urutan BAB 1..N", "required": true },
+        "title": { "type": "string", "description": "Judul materi BAB", "required": true },
+        "description": { "type": "string", "description": "Keterangan ringkas materi BAB", "required": false },
+        "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
+        "classId": { "type": "string", "description": "ID rombel", "required": true },
+        "gradeLevel": { "type": "string", "description": "Tingkat kelas (7, 8, 9)", "required": true },
+        "teacherId": { "type": "string", "description": "ID guru pengampu pembuat BAB", "required": true },
+        "academicYear": { "type": "string", "description": "Tahun ajaran e.g. 2026/2027", "required": true },
+        "semester": { "type": "string", "description": "Semester Ganjil / Genap", "required": true },
+        "linkedTpIds": { "type": "array", "description": "Daftar ID TP opsional terkait BAB", "required": false },
+        "isLocked": { "type": "boolean", "description": "Status kunci BAB", "required": false },
+        "createdAt": { "type": "string", "description": "Waktu dibuat", "required": true },
+        "updatedAt": { "type": "string", "description": "Waktu diperbarui", "required": true }
+      },
+      "rules": {
+        "read": "isAuthenticated()",
+        "write": "(isAdmin() || isGuru()) && isAssessmentPeriodUnlocked(request.resource.data.academicYear, request.resource.data.semester)"
+      }
+    },
     "AssessmentScore": {
       "description": "Pengolahan nilai formatif, sumatif materi, SAS, nilai akhir rapor, serta deskripsi capaian kompetensi berbasis TP",
       "collectionName": "assessment_scores",
@@ -255,7 +280,15 @@
         "semester": { "type": "string", "description": "Semester Ganjil / Genap", "required": true },
         "formatifScores": { "type": "map", "description": "Map nilai formatif", "required": false },
         "sumatifMateriScores": { "type": "map", "description": "Map nilai sumatif lingkup materi", "required": false },
+        "chapterScores": { "type": "map", "description": "Map nilai sumatif per BAB Materi (chapterId -> 0-100)", "required": false },
         "sumatifAkhirSemester": { "type": "number", "description": "Nilai sumatif akhir semester (SAS)", "required": false },
+        "hasSasScore": { "type": "boolean", "description": "Penanda eksplisit apakah Nilai SAS sudah diisi (membedakan 0 asli dan kosong)", "required": false },
+        "babAverage": { "type": "number", "description": "Rata-rata nilai BAB materi terisi", "required": false },
+        "babWeightPercent": { "type": "number", "description": "Bobot persentase nilai BAB saat kalkulasi", "required": false },
+        "sasWeightPercent": { "type": "number", "description": "Bobot persentase nilai SAS saat kalkulasi", "required": false },
+        "finalScoreBreakdown": { "type": "string", "description": "Rincian perhitungan nilai akhir rapor", "required": false },
+        "hasMissingComponents": { "type": "boolean", "description": "Penanda ada komponen BAB atau SAS yang belum lengkap", "required": false },
+        "missingComponentNote": { "type": "string", "description": "Peringatan komponen nilai BAB/SAS yang kosong", "required": false },
         "finalScore": { "type": "number", "description": "Nilai akhir rapor (0-100)", "required": true },
         "predicate": { "type": "string", "description": "Predikat nilai A/B/C/D", "required": true },
         "highestCompetenceDesc": { "type": "string", "description": "Deskripsi capaian optimal/baik", "required": false },
@@ -318,7 +351,10 @@
         "teacherId": { "type": "string", "description": "ID guru pengampu", "required": true },
         "subjectId": { "type": "string", "description": "ID mata pelajaran", "required": true },
         "classId": { "type": "string", "description": "ID rombel siswa", "required": true },
-        "tpId": { "type": "string", "description": "ID TP utama", "required": true },
+        "chapterId": { "type": "string", "description": "ID BAB Materi terkait", "required": false },
+        "chapterCode": { "type": "string", "description": "Kode BAB Materi misal BAB 1", "required": false },
+        "chapterTitle": { "type": "string", "description": "Judul BAB Materi", "required": false },
+        "tpId": { "type": "string", "description": "ID TP utama atau fallback chapterId", "required": true },
         "tpIds": { "type": "array", "description": "Daftar ID TP yang diujikan", "required": false },
         "assessmentTitle": { "type": "string", "description": "Judul penilaian sumatif (mis. UH 1)", "required": false },
         "date": { "type": "string", "description": "Tanggal penilaian", "required": true },

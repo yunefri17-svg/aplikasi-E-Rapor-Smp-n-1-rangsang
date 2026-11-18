@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   KKTPConfig, 
   KKTPCriterion, 
   Subject, 
   LearningObjective, 
   User,
+  Teacher,
   TeachingAssignment
 } from '../types/erapor';
 import { 
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   ChevronRight
 } from 'lucide-react';
+import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
 
 interface KKTPConfigViewProps {
   subjects: Subject[];
@@ -27,6 +29,7 @@ interface KKTPConfigViewProps {
   onSaveKKTP: (config: KKTPConfig) => void;
   currentUser: User;
   teachingAssignments: TeachingAssignment[];
+  teachers?: Teacher[];
 }
 
 export const KKTPConfigView: React.FC<KKTPConfigViewProps> = ({
@@ -35,29 +38,45 @@ export const KKTPConfigView: React.FC<KKTPConfigViewProps> = ({
   kktpConfigs,
   onSaveKKTP,
   currentUser,
-  teachingAssignments
+  teachingAssignments,
+  teachers = []
 }) => {
-  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
-
-  // Filter subjects based on teaching assignments if not admin
+  // Filter subjects based on teaching assignments if not admin/kepsek
   const visibleSubjects = useMemo(() => {
-    if (isAdmin) return subjects;
-    const assignedIds = teachingAssignments
-      .filter(ta => ta.teacherId === currentUser.teacherId && ta.status === 'active')
-      .map(ta => ta.subjectId);
-    return subjects.filter(s => assignedIds.includes(s.id));
-  }, [subjects, teachingAssignments, currentUser, isAdmin]);
+    return getVisibleSubjectsForUser({
+      currentUser,
+      subjects,
+      teachingAssignments,
+      teachers,
+      includeAllForWaliKelas: false
+    });
+  }, [subjects, teachingAssignments, teachers, currentUser]);
 
   const [selectedSubject, setSelectedSubject] = useState(visibleSubjects[0]?.id || '');
   const [selectedGrade, setSelectedGrade] = useState<'7' | '8' | '9'>('7');
 
+  useEffect(() => {
+    if (visibleSubjects.length > 0 && !visibleSubjects.some((s) => s.id === selectedSubject)) {
+      setSelectedSubject(visibleSubjects[0].id);
+    } else if (visibleSubjects.length === 0 && selectedSubject !== '') {
+      setSelectedSubject('');
+    }
+  }, [visibleSubjects, selectedSubject]);
+
   const relevantObjectives = useMemo(() => {
-    return learningObjectives.filter(tp => 
-      tp.subjectId === selectedSubject && tp.gradeLevel === selectedGrade
+    if (!selectedSubject) return [];
+    return learningObjectives.filter(
+      (tp) => tp.subjectId === selectedSubject && tp.gradeLevel === selectedGrade
     );
   }, [learningObjectives, selectedSubject, selectedGrade]);
 
   const [activeTpId, setActiveTpId] = useState<string>('');
+
+  useEffect(() => {
+    if (activeTpId && !relevantObjectives.some((tp) => tp.id === activeTpId)) {
+      setActiveTpId('');
+    }
+  }, [relevantObjectives, activeTpId]);
 
   const currentConfig = useMemo(() => {
     return kktpConfigs.find(c => c.tpId === activeTpId) || null;

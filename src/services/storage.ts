@@ -5,6 +5,7 @@ import {
   Classroom,
   Subject,
   Curriculum,
+  LearningChapter,
   LearningObjective,
   AssessmentScore,
   Attendance,
@@ -94,6 +95,7 @@ export interface AppDatabase {
   descriptionBank: SubjectDescriptionBank[];
   teachingAssignments: TeachingAssignment[];
   // Kurikulum Merdeka 2025
+  learningChapters: LearningChapter[];
   formativeAssessments: FormativeAssessment[];
   summativeAssessments: SummativeAssessment[];
   kktpConfigs: KKTPConfig[];
@@ -113,6 +115,48 @@ export interface AppDatabase {
   assessmentPolicy?: AssessmentPolicyConfig;
 }
 
+
+const DELETED_ENTITIES_KEY = 'erapor_deleted_entity_ids_v1';
+
+const filterDeletedObjectives = (list: LearningObjective[]): LearningObjective[] => {
+  try {
+    const rawTombstones = localStorage.getItem(DELETED_ENTITIES_KEY);
+    if (!rawTombstones) return list;
+    const parsedTombstones = JSON.parse(rawTombstones) as Record<string, string[]>;
+    const deletedSet = new Set<string>([
+      ...(Array.isArray(parsedTombstones.assessments) ? parsedTombstones.assessments : []),
+      ...(Array.isArray(parsedTombstones.learningObjectives) ? parsedTombstones.learningObjectives : [])
+    ]);
+    if (deletedSet.size === 0) return list;
+    return list.filter((tp) => {
+      if (!tp || !tp.id) return false;
+      const sanitized = String(tp.id).replace(/[\/\s#\[\]*?]/g, '_');
+      return !deletedSet.has(tp.id) && !deletedSet.has(sanitized);
+    });
+  } catch {
+    return list;
+  }
+};
+
+const filterDeletedChapters = (list: LearningChapter[]): LearningChapter[] => {
+  try {
+    const rawTombstones = localStorage.getItem(DELETED_ENTITIES_KEY);
+    if (!rawTombstones) return list;
+    const parsedTombstones = JSON.parse(rawTombstones) as Record<string, string[]>;
+    const deletedSet = new Set<string>([
+      ...(Array.isArray(parsedTombstones.summative_chapters) ? parsedTombstones.summative_chapters : []),
+      ...(Array.isArray(parsedTombstones.learningChapters) ? parsedTombstones.learningChapters : [])
+    ]);
+    if (deletedSet.size === 0) return list;
+    return list.filter((ch) => {
+      if (!ch || !ch.id) return false;
+      const sanitized = String(ch.id).replace(/[\/\s#\[\]*?]/g, '_');
+      return !deletedSet.has(ch.id) && !deletedSet.has(sanitized);
+    });
+  } catch {
+    return list;
+  }
+};
 
 export const loadDatabase = (): AppDatabase => {
   try {
@@ -157,7 +201,7 @@ export const loadDatabase = (): AppDatabase => {
         teachers: initialTeachers,
         classrooms: initialClassrooms,
         students: initialStudents,
-        learningObjectives: initialLearningObjectives,
+        learningObjectives: filterDeletedObjectives(initialLearningObjectives),
         scores: initialScores,
         attendance: initialAttendance,
         extracurriculars: initialExtracurriculars,
@@ -168,6 +212,7 @@ export const loadDatabase = (): AppDatabase => {
         notifications: [],
         descriptionBank: defaultDescriptionBank,
         teachingAssignments: initialTeachingAssignments,
+        learningChapters: [],
         formativeAssessments: initialFormativeAssessments,
         summativeAssessments: initialSummativeAssessments,
         kktpConfigs: initialKKTPConfigs,
@@ -273,7 +318,9 @@ export const loadDatabase = (): AppDatabase => {
         teachers: loadedTeachers,
         classrooms: sortClassrooms(parsed.classrooms || initialClassrooms),
         students,
-        learningObjectives: parsed.learningObjectives || initialLearningObjectives,
+        learningObjectives: filterDeletedObjectives(
+          Array.isArray(parsed.learningObjectives) ? parsed.learningObjectives : initialLearningObjectives
+        ),
         scores,
         attendance,
         extracurriculars: parsed.extracurriculars || initialExtracurriculars,
@@ -284,6 +331,9 @@ export const loadDatabase = (): AppDatabase => {
         notifications: parsed.notifications || [],
         descriptionBank: mergeDescriptionBankWithDefaults(parsed.descriptionBank),
         teachingAssignments: loadedTeachingAssignments,
+        learningChapters: filterDeletedChapters(
+          Array.isArray(parsed.learningChapters) ? parsed.learningChapters : []
+        ),
         formativeAssessments: parsed.formativeAssessments?.length ? parsed.formativeAssessments : initialFormativeAssessments,
         summativeAssessments: parsed.summativeAssessments?.length ? parsed.summativeAssessments : initialSummativeAssessments,
         kktpConfigs: parsed.kktpConfigs?.length ? parsed.kktpConfigs : initialKKTPConfigs,
@@ -317,7 +367,7 @@ export const loadDatabase = (): AppDatabase => {
       teachers: initialTeachers,
       classrooms: initialClassrooms,
       students: initialStudents,
-      learningObjectives: initialLearningObjectives,
+      learningObjectives: filterDeletedObjectives(initialLearningObjectives),
       scores: initialScores,
       attendance: initialAttendance,
       extracurriculars: initialExtracurriculars,
@@ -328,6 +378,7 @@ export const loadDatabase = (): AppDatabase => {
       notifications: [],
       descriptionBank: defaultDescriptionBank,
       teachingAssignments: initialTeachingAssignments,
+      learningChapters: [],
       formativeAssessments: [],
       summativeAssessments: [],
       kktpConfigs: [],
@@ -615,6 +666,7 @@ export const partialPurgeMasterData = (db: AppDatabase): AppDatabase => {
   updatedDb.studentExtracurriculars = [];
   updatedDb.formativeAssessments = [];
   updatedDb.summativeAssessments = [];
+  updatedDb.learningChapters = [];
   updatedDb.kktpConfigs = [];
   updatedDb.finalScoreConfigs = [];
   

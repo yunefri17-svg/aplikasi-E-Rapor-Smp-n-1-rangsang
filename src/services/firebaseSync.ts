@@ -25,6 +25,7 @@ import {
   StudentExtracurricular,
   Extracurricular,
   Curriculum,
+  LearningChapter,
   LearningObjective,
   SchoolProfile,
   User,
@@ -453,17 +454,19 @@ export async function syncAllToFirestore(
 
     // 0. Prune deleted master items from Cloud Firestore so deleted records don't persist in cloud
     try {
-      const [remoteTeachers, remoteStudents, remoteClassrooms, remoteSubjects] = await Promise.all([
+      const [remoteTeachers, remoteStudents, remoteClassrooms, remoteSubjects, remoteAssessments] = await Promise.all([
         getDocs(collection(db, 'teachers')),
         getDocs(collection(db, 'students')),
         getDocs(collection(db, 'classrooms')),
-        getDocs(collection(db, 'subjects'))
+        getDocs(collection(db, 'subjects')),
+        getDocs(collection(db, 'assessments'))
       ]);
 
       const localTeacherIds = new Set(dbData.teachers.map((t) => sanitizeDocId(t.id)));
       const localStudentIds = new Set(dbData.students.map((s) => sanitizeDocId(s.id)));
       const localClassIds = new Set(dbData.classrooms.map((c) => sanitizeDocId(c.id)));
       const localSubjectIds = new Set(dbData.subjects.map((s) => sanitizeDocId(s.id)));
+      const localObjectiveIds = new Set(dbData.learningObjectives.map((tp) => sanitizeDocId(tp.id)));
 
       const pruneBatch = writeBatch(db);
       let pruneCount = 0;
@@ -488,6 +491,16 @@ export async function syncAllToFirestore(
       });
       remoteSubjects.docs.forEach((docSnap) => {
         if (!localSubjectIds.has(docSnap.id) || isEntityDeleted('subjects', docSnap.id)) {
+          pruneBatch.delete(docSnap.ref);
+          pruneCount++;
+        }
+      });
+      remoteAssessments.docs.forEach((docSnap) => {
+        if (
+          !localObjectiveIds.has(docSnap.id) ||
+          isEntityDeleted('assessments', docSnap.id) ||
+          isEntityDeleted('learningObjectives', docSnap.id)
+        ) {
           pruneBatch.delete(docSnap.ref);
           pruneCount++;
         }
@@ -534,7 +547,9 @@ export async function syncAllToFirestore(
       masterOps.push({ ref: doc(db, 'curricula', sanitizeDocId(cur.id)), data: cur });
     });
     dbData.learningObjectives.forEach((tp) => {
-      masterOps.push({ ref: doc(db, 'assessments', sanitizeDocId(tp.id)), data: tp });
+      if (!isEntityDeleted('assessments', tp.id) && !isEntityDeleted('learningObjectives', tp.id)) {
+        masterOps.push({ ref: doc(db, 'assessments', sanitizeDocId(tp.id)), data: tp });
+      }
     });
     if (dbData.teachingAssignments) {
       dbData.teachingAssignments.forEach((ta) => {
@@ -553,11 +568,20 @@ export async function syncAllToFirestore(
     dbData.scores.forEach((sc) => {
       assessmentOps.push({ ref: doc(db, 'assessment_scores', sanitizeDocId(sc.id)), data: sc });
     });
+    (dbData.learningChapters || []).forEach((ch) => {
+      if (!isEntityDeleted('summative_chapters', ch.id) && !isEntityDeleted('learningChapters', ch.id)) {
+        assessmentOps.push({ ref: doc(db, 'summative_chapters', sanitizeDocId(ch.id)), data: ch });
+      }
+    });
     dbData.formativeAssessments.forEach((fa) => {
-      assessmentOps.push({ ref: doc(db, 'formative_assessments', sanitizeDocId(fa.id)), data: fa });
+      if (!isEntityDeleted('formative_assessments', fa.id)) {
+        assessmentOps.push({ ref: doc(db, 'formative_assessments', sanitizeDocId(fa.id)), data: fa });
+      }
     });
     dbData.summativeAssessments.forEach((sa) => {
-      assessmentOps.push({ ref: doc(db, 'summative_assessments', sanitizeDocId(sa.id)), data: sa });
+      if (!isEntityDeleted('summative_assessments', sa.id)) {
+        assessmentOps.push({ ref: doc(db, 'summative_assessments', sanitizeDocId(sa.id)), data: sa });
+      }
     });
     dbData.kktpConfigs.forEach((kc) => {
       assessmentOps.push({ ref: doc(db, 'kktp_configs', sanitizeDocId(kc.id)), data: kc });
@@ -801,7 +825,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       kokurikulerScoresSnap,
       kokurikulerDescriptionsSnap,
       descriptionBankDoc,
-      assessmentPolicyDoc
+      assessmentPolicyDoc,
+      chaptersSnap
     ] = await Promise.all([
       getDoc(doc(db, 'schools', 'smpn1rangsang')),
       getDoc(doc(db, 'application_settings', 'tombstones')).catch(() => null),
@@ -829,7 +854,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'kokurikuler_scores')).catch(() => null),
       getDocs(collection(db, 'kokurikuler_descriptions')).catch(() => null),
       getDoc(doc(db, 'application_settings', 'description_bank')).catch(() => null),
-      getDoc(doc(db, 'application_settings', 'assessment_policy')).catch(() => null)
+      getDoc(doc(db, 'application_settings', 'assessment_policy')).catch(() => null),
+      getDocs(collection(db, 'summative_chapters')).catch(() => null)
     ]);
 
     if (tombstonesDoc && (tombstonesDoc as any).exists && (tombstonesDoc as any).exists()) {
@@ -884,6 +910,7 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       learningObjectives: tpsSnap.docs.map((d) => d.data() as LearningObjective),
       users: usersSnap.docs.map((d) => d.data() as User),
       teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment),
+      ...(chaptersSnap ? { learningChapters: chaptersSnap.docs.map((d) => d.data() as LearningChapter) } : {}),
       formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment),
       summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
       kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
@@ -971,6 +998,7 @@ export function queueAutoSyncToFirestore(dbData: AppDatabase, delayMs: number = 
 export interface FirestoreRealtimePayload {
   scores?: AssessmentScore[]; 
   notifications?: AppNotification[];
+  learningChapters?: LearningChapter[];
   formativeAssessments?: FormativeAssessment[];
   summativeAssessments?: SummativeAssessment[];
   kktpConfigs?: KKTPConfig[];
@@ -1054,6 +1082,7 @@ export function listenToFirestoreRealtime(
   const unsubscribers = [
     genericListener('assessment_scores', 'scores'),
     genericListener('notifications', 'notifications'),
+    genericListener('summative_chapters', 'learningChapters'),
     genericListener('formative_assessments', 'formativeAssessments'),
     genericListener('summative_assessments', 'summativeAssessments'),
     genericListener('kktp_configs', 'kktpConfigs'),
@@ -1184,6 +1213,53 @@ export async function surgicalSync(
     }
     console.warn(`Surgical sync failed for ${collectionName}/${docId}:`, err);
     return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Quota-efficient batch write to Cloud Firestore (chunks up to 350 docs per commit).
+ * Prevents firing N separate writes + full-DB re-upload when saving class assessments.
+ */
+export async function saveBatchToFirestoreDirect<T extends { id: string }>(
+  collectionName: string,
+  items: T[]
+): Promise<{ success: boolean; count: number; error?: string; quotaExceeded?: boolean }> {
+  if (items.length === 0) return { success: true, count: 0 };
+  if (isCloudQuotaExhausted) {
+    return { success: true, count: 0, quotaExceeded: true };
+  }
+
+  try {
+    await ensureFirebaseAuth();
+    const BATCH_SIZE = 350;
+    let totalSaved = 0;
+
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const chunk = items.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((item) => {
+        batch.set(doc(db, collectionName, sanitizeDocId(item.id)), cleanForFirestore(item), {
+          merge: true
+        });
+      });
+      await withTimeout(batch.commit(), 20000);
+      totalSaved += chunk.length;
+    }
+
+    updateSyncState({
+      status: 'synced',
+      lastSyncTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      message: `${totalSaved} data ${collectionName} berhasil disinkronkan.`
+    });
+
+    return { success: true, count: totalSaved };
+  } catch (err: any) {
+    if (isQuotaExceededError(err)) {
+      await markQuotaExceeded(err?.message);
+      return { success: true, count: 0, quotaExceeded: true };
+    }
+    console.warn(`Batch sync warning for ${collectionName}:`, err);
+    return { success: false, count: 0, error: err?.message || String(err) };
   }
 }
 

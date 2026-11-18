@@ -11,7 +11,7 @@ import {
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
-import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
+import { getSubjectsForClassPeriod, hasEnteredAssessmentScore } from '../utils/electiveSubjectHelper';
 import {
   Table,
   CheckCircle2,
@@ -105,7 +105,8 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
           classStudents.some((st: Student) => st.id === s.studentId)
       );
 
-      const enteredCount = subjectScores.filter((s: AssessmentScore) => s.finalScore !== undefined && s.finalScore > 0).length;
+      const enteredScores = subjectScores.filter((s: AssessmentScore) => hasEnteredAssessmentScore(s));
+      const enteredCount = enteredScores.length;
       const totalStudents = classStudents.length;
 
       // Determine overall status
@@ -124,7 +125,7 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
       }
 
       // Calculate average score if scores exist
-      const validScores = subjectScores.map((s: AssessmentScore) => s.finalScore).filter((v: number) => v !== undefined && v > 0);
+      const validScores = enteredScores.map((s: AssessmentScore) => s.manualFinalScore ?? s.finalScore).filter((v: number) => typeof v === 'number' && Number.isFinite(v));
       const average = validScores.length > 0
         ? Math.round(validScores.reduce((acc: number, curr: number) => acc + curr, 0) / validScores.length)
         : 0;
@@ -594,10 +595,11 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
                           s.semester === db.schoolProfile.activeSemester
                       );
 
-                      const finalVal = scoreObj?.finalScore;
+                      const hasEntered = hasEnteredAssessmentScore(scoreObj);
+                      const finalVal = scoreObj?.manualFinalScore ?? scoreObj?.finalScore;
                       let predikat = '-';
                       let predikatColor = 'text-slate-400';
-                      if (finalVal !== undefined && finalVal > 0) {
+                      if (hasEntered && finalVal !== undefined) {
                         if (finalVal >= 90) { predikat = 'A'; predikatColor = 'text-emerald-700 font-bold'; }
                         else if (finalVal >= 80) { predikat = 'B'; predikatColor = 'text-blue-700 font-bold'; }
                         else if (finalVal >= 70) { predikat = 'C'; predikatColor = 'text-amber-700 font-bold'; }
@@ -610,7 +612,7 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
                           <td className="p-3 text-xs font-mono">{st.nisn} / {st.nis}</td>
                           <td className="p-3 font-semibold text-slate-800">{st.name}</td>
                           <td className="p-3 text-center font-bold">
-                            {finalVal !== undefined && finalVal > 0 ? (
+                            {hasEntered && finalVal !== undefined ? (
                               <span className="bg-slate-100 px-2.5 py-1 rounded text-slate-800">
                                 {finalVal}
                               </span>
