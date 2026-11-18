@@ -2,7 +2,9 @@ import {
   AssessmentScore,
   Curriculum,
   LearningChapter,
-  SummativeAssessment
+  LearningObjective,
+  SummativeAssessment,
+  SummativeAssessmentPlan
 } from '../types/erapor';
 import { calculatePredicate } from '../services/storage';
 import { normalizeAcademicYearValue, normalizeSemesterValue } from './electiveSubjectHelper';
@@ -44,6 +46,19 @@ export function buildLearningChapterId(
   )}-${sanitizePeriodSegment(semester)}-${orderIndex}-${Date.now().toString(36)}${rand}`.slice(0, 128);
 }
 
+export function buildSummativePlanId(
+  subjectId: string,
+  classId: string,
+  academicYear: string,
+  semester: 'Ganjil' | 'Genap',
+  orderIndex: number
+): string {
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `sumplan-${sanitizePeriodSegment(subjectId)}-${sanitizePeriodSegment(classId)}-${sanitizePeriodSegment(
+    academicYear
+  )}-${sanitizePeriodSegment(semester)}-${orderIndex}-${Date.now().toString(36)}${rand}`.slice(0, 128);
+}
+
 export function clampScore0To100(val: number): number {
   if (!Number.isFinite(val)) return 0;
   return Math.min(100, Math.max(0, val));
@@ -77,6 +92,29 @@ export function filterChaptersForContext(
     });
 }
 
+export function filterSummativePlansForContext(
+  plans: SummativeAssessmentPlan[],
+  params: {
+    subjectId: string;
+    classId?: string;
+    academicYear: string;
+    semester: 'Ganjil' | 'Genap';
+  }
+): SummativeAssessmentPlan[] {
+  const targetYear = normalizeAcademicYearValue(params.academicYear);
+  const targetSem = normalizeSemesterValue(params.semester);
+
+  return (plans || [])
+    .filter((pl) => {
+      if (!pl || pl.subjectId !== params.subjectId) return false;
+      if (params.classId && pl.classId !== params.classId) return false;
+      if (normalizeAcademicYearValue(pl.academicYear) !== targetYear) return false;
+      if (normalizeSemesterValue(pl.semester) !== targetSem) return false;
+      return true;
+    })
+    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '') || (a.title || '').localeCompare(b.title || ''));
+}
+
 export function getNextChapterOrderAndCode(existingChapters: LearningChapter[]): {
   orderIndex: number;
   code: string;
@@ -89,9 +127,30 @@ export function getNextChapterOrderAndCode(existingChapters: LearningChapter[]):
   };
 }
 
+export function suggestNextTpCode(
+  existingObjectives: LearningObjective[],
+  gradeLevel: '7' | '8' | '9' | string
+): string {
+  const prefix = String(gradeLevel || '7').trim();
+  let maxMinor = 0;
+  existingObjectives.forEach((tp) => {
+    const code = String(tp.code || '').trim();
+    const match = code.match(/(\d+)\.(\d+)/);
+    if (match && match[1] === prefix) {
+      const minor = Number(match[2]);
+      if (Number.isFinite(minor) && minor > maxMinor) {
+        maxMinor = minor;
+      }
+    }
+  });
+  return `TP ${prefix}.${maxMinor + 1}`;
+}
+
 export interface ResolvedSchoolWeights {
-  babWeightPercent: number;
-  sasWeightPercent: number;
+  formatifWeightPercent: number; // e.g. 50%
+  sumatifWeightPercent: number; // e.g. 50%
+  babWeightPercent: number; // Backward compatibility alias
+  sasWeightPercent: number; // Backward compatibility alias
   passingCriteria: number;
   curriculumId: string;
   formulaLabel: string;
@@ -99,21 +158,24 @@ export interface ResolvedSchoolWeights {
 
 export function resolveSchoolWeights(curricula: Curriculum[] = []): ResolvedSchoolWeights {
   const curMerdeka = curricula.find((c) => c.id === 'cur-merdeka') || curricula[0];
-  const rawBab = Number(curMerdeka?.formatifWeight);
-  const rawSas = Number(curMerdeka?.sumatifWeight);
-  const babWeightPercent = Number.isFinite(rawBab) && rawBab >= 0 ? rawBab : 50;
-  const sasWeightPercent = Number.isFinite(rawSas) && rawSas >= 0 ? rawSas : 100 - babWeightPercent;
-  const total = babWeightPercent + sasWeightPercent;
+  const rawFormatif = Number(curMerdeka?.formatifWeight);
+  const rawSumatif = Number(curMerdeka?.sumatifWeight);
 
-  const normalizedBab = total > 0 ? Math.round((babWeightPercent / total) * 100) : 50;
-  const normalizedSas = 100 - normalizedBab;
+  const formatifWeightPercent = Number.isFinite(rawFormatif) && rawFormatif >= 0 ? rawFormatif : 50;
+  const sumatifWeightPercent = Number.isFinite(rawSumatif) && rawSumatif >= 0 ? rawSumatif : 100 - formatifWeightPercent;
+  const total = formatifWeightPercent + sumatifWeightPercent;
+
+  const normalizedFormatif = total > 0 ? Math.round((formatifWeightPercent / total) * 100) : 50;
+  const normalizedSumatif = 100 - normalizedFormatif;
 
   return {
-    babWeightPercent: normalizedBab,
-    sasWeightPercent: normalizedSas,
+    formatifWeightPercent: normalizedFormatif,
+    sumatifWeightPercent: normalizedSumatif,
+    babWeightPercent: normalizedFormatif,
+    sasWeightPercent: normalizedSumatif,
     passingCriteria: curMerdeka?.passingCriteria || 75,
     curriculumId: curMerdeka?.id || 'cur-merdeka',
-    formulaLabel: `(${normalizedBab}% × Rata-rata Nilai BAB) + (${normalizedSas}% × Nilai SAS)`
+    formulaLabel: `(${normalizedFormatif}% × Rata-rata Formatif) + (${normalizedSumatif}% × Rata-rata Sumatif)`
   };
 }
 
@@ -186,12 +248,60 @@ export function aggregateChapterScoresFromSummatives(params: {
   return result;
 }
 
+export const formatScoreDecimal = (n: number): string => {
+  if (!Number.isFinite(n)) return '';
+  const rounded = Math.round(n * 100) / 100;
+  return Number.isInteger(rounded)
+    ? String(rounded)
+    : String(rounded).replace('.', ',');
+};
+
+export function calculateFormativeAverage(
+  formatifScores?: Record<string, number> | number[] | null,
+  directScore?: number | null
+): {
+  average?: number;
+  count: number;
+  scores: number[];
+} {
+  const vals: number[] = [];
+  if (typeof directScore === 'number' && Number.isFinite(directScore)) {
+    vals.push(clampScore0To100(directScore));
+  }
+  if (Array.isArray(formatifScores)) {
+    formatifScores.forEach((v) => {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        vals.push(clampScore0To100(v));
+      }
+    });
+  } else if (formatifScores && typeof formatifScores === 'object') {
+    Object.values(formatifScores).forEach((v) => {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        vals.push(clampScore0To100(v));
+      }
+    });
+  }
+
+  if (vals.length === 0) {
+    return { average: undefined, count: 0, scores: [] };
+  }
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return {
+    average: Math.round(avg * 100) / 100,
+    count: vals.length,
+    scores: vals
+  };
+}
+
 export interface StudentReportCalculationResult {
   chapterScores: Record<string, number>;
   babAverage: number | undefined;
   filledChapterCount: number;
   totalChapterCount: number;
   sasScore: number | undefined;
+  formatifAverage: number | undefined;
+  sumatifAverage: number | undefined;
+  rawFinalScore: number | undefined;
   finalScore: number | undefined;
   predicate: 'A' | 'B' | 'C' | 'D' | undefined;
   breakdownText: string;
@@ -199,33 +309,45 @@ export interface StudentReportCalculationResult {
   missingComponentNote: string | undefined;
   hasMissingComponents: boolean;
   isComplete: boolean;
+  completenessStatus: 'LENGKAP' | 'BELUM_LENGKAP';
 }
 
-const formatNum = (n: number): string => {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
-};
-
-export function computeStudentReportScore(params: {
+export interface ComputeStudentReportScoreParams {
   chapters: LearningChapter[];
   chapterScores?: Record<string, number>;
   sasScore?: number;
+  formatifScore?: number;
+  formatifScores?: Record<string, number> | number[];
   manualFinalScore?: number;
-  babWeightPercent: number;
-  sasWeightPercent: number;
+  formatifWeightPercent?: number; // default 50%
+  sumatifWeightPercent?: number; // default 50%
+  babWeightPercent?: number; // Backward compatibility alias
+  sasWeightPercent?: number; // Backward compatibility alias
   passingCriteria?: number;
   legacyMateriScores?: Record<string, number>;
-}): StudentReportCalculationResult {
+}
+
+export function computeStudentReportScore(
+  params: ComputeStudentReportScoreParams
+): StudentReportCalculationResult {
   const {
     chapters,
     chapterScores = {},
     sasScore,
+    formatifScore,
+    formatifScores,
     manualFinalScore,
-    babWeightPercent,
-    sasWeightPercent,
+    formatifWeightPercent = 50,
+    sumatifWeightPercent = 50,
     passingCriteria = 75,
     legacyMateriScores = {}
   } = params;
 
+  // 1. Calculate Formatif Average
+  const fmtRes = calculateFormativeAverage(formatifScores, formatifScore);
+  const formatifAverage = fmtRes.average;
+
+  // 2. Calculate Sumatif BABs
   const cleanChapterScores: Record<string, number> = {};
   const filledChapterValues: number[] = [];
   const missingChapterCodes: string[] = [];
@@ -241,7 +363,6 @@ export function computeStudentReportScore(params: {
     }
   });
 
-  // Legacy fallback only when no BABs have been configured yet
   const legacyValues =
     chapters.length === 0
       ? Object.values(legacyMateriScores).filter(
@@ -254,11 +375,25 @@ export function computeStudentReportScore(params: {
   const rawBabAvg = hasBab
     ? activeMateriValues.reduce((a, b) => a + b, 0) / activeMateriValues.length
     : undefined;
-  const babAverage = rawBabAvg !== undefined ? Math.round(rawBabAvg * 10) / 10 : undefined;
+  const babAverage = rawBabAvg !== undefined ? Math.round(rawBabAvg * 100) / 100 : undefined;
 
+  // 3. SAS Score
   const hasSas = typeof sasScore === 'number' && Number.isFinite(sasScore);
   const cleanSas = hasSas ? clampScore0To100(sasScore!) : undefined;
 
+  // 4. Sumatif Components: All filled BAB scores + SAS
+  const allSummativeVals: number[] = [...activeMateriValues];
+  if (cleanSas !== undefined) {
+    allSummativeVals.push(cleanSas);
+  }
+
+  let sumatifAverage: number | undefined;
+  if (allSummativeVals.length > 0) {
+    const rawSumAvg = allSummativeVals.reduce((a, b) => a + b, 0) / allSummativeVals.length;
+    sumatifAverage = Math.round(rawSumAvg * 100) / 100;
+  }
+
+  // 5. Missing Component Warnings
   const missingWarnings: string[] = [];
   if (chapters.length === 0 && legacyValues.length === 0) {
     missingWarnings.push('Belum ada BAB Materi di modul Sumatif');
@@ -268,39 +403,54 @@ export function computeStudentReportScore(params: {
   if (!hasSas) {
     missingWarnings.push('Nilai SAS belum diisi (tidak dihitung 0)');
   }
+  if (formatifAverage === undefined) {
+    missingWarnings.push('Nilai Formatif belum diisi (tidak dihitung 0)');
+  }
+
+  // 6. Calculate Final Score & Breakdown
+  const fWeight = (formatifWeightPercent ?? 50) / 100;
+  const sWeight = (sumatifWeightPercent ?? 50) / 100;
 
   let finalScore: number | undefined;
+  let rawFinalScore: number | undefined;
   let breakdownText = '';
+
+  if (formatifAverage !== undefined && sumatifAverage !== undefined) {
+    // Official School Rule: (Rata-rata Formatif × 50%) + (Rata-rata Sumatif × 50%)
+    const fmtPart = formatifAverage * fWeight;
+    const sumPart = sumatifAverage * sWeight;
+    const rawFinal = fmtPart + sumPart;
+    rawFinalScore = Math.round(rawFinal * 100) / 100;
+    finalScore = Math.round(clampScore0To100(rawFinal));
+    breakdownText = `(Formatif: ${formatScoreDecimal(formatifAverage)} × ${Math.round(
+      fWeight * 100
+    )}%) + (Sumatif: ${formatScoreDecimal(sumatifAverage)} × ${Math.round(
+      sWeight * 100
+    )}%) = ${formatScoreDecimal(fmtPart)} + ${formatScoreDecimal(sumPart)} = ${formatScoreDecimal(
+      rawFinalScore
+    )} → ${finalScore}`;
+  } else {
+    rawFinalScore = undefined;
+    finalScore = undefined;
+    const missingParts: string[] = [];
+    if (formatifAverage === undefined) missingParts.push('Nilai Formatif belum diisi');
+    if (sumatifAverage === undefined) missingParts.push('Nilai Sumatif/SAS belum diisi');
+    breakdownText = `Belum lengkap: ${missingParts.join(' dan ')} (tidak dihitung 0).`;
+  }
 
   if (typeof manualFinalScore === 'number' && Number.isFinite(manualFinalScore)) {
     finalScore = Math.round(clampScore0To100(manualFinalScore));
-    breakdownText = `Input langsung Nilai Akhir oleh guru: ${finalScore}`;
-  } else if (rawBabAvg !== undefined && cleanSas !== undefined) {
-    const rawFinal = rawBabAvg * (babWeightPercent / 100) + cleanSas * (sasWeightPercent / 100);
-    finalScore = Math.round(clampScore0To100(rawFinal));
-    const sourceLabel =
-      chapters.length > 0
-        ? `Rata-rata ${activeMateriValues.length}/${chapters.length} BAB`
-        : `Rata-rata ${activeMateriValues.length} Materi`;
-    breakdownText = `(${sourceLabel}: ${formatNum(rawBabAvg)} × ${babWeightPercent}%) + (SAS: ${formatNum(
-      cleanSas
-    )} × ${sasWeightPercent}%) = ${formatNum(rawFinal)} → ${finalScore}`;
-  } else if (rawBabAvg !== undefined) {
-    finalScore = Math.round(clampScore0To100(rawBabAvg));
-    breakdownText = `Sementara dari rata-rata ${activeMateriValues.length} BAB terisi (${formatNum(
-      rawBabAvg
-    )}) — SAS belum diisi`;
-  } else if (cleanSas !== undefined) {
-    finalScore = Math.round(clampScore0To100(cleanSas));
-    breakdownText = `Sementara dari Nilai SAS (${formatNum(cleanSas)}) — Nilai BAB belum diisi`;
-  } else {
-    finalScore = undefined;
-    breakdownText = 'Belum ada nilai BAB maupun SAS yang diisi.';
+    breakdownText = `Input langsung Nilai Akhir oleh guru: ${finalScore}${rawFinalScore !== undefined ? ` (Otomatis kalkulasi: ${formatScoreDecimal(rawFinalScore)})` : ''}`;
   }
 
   const predicate = finalScore !== undefined ? calculatePredicate(finalScore, passingCriteria) : undefined;
   const hasMissingComponents = missingWarnings.length > 0;
   const missingComponentNote = hasMissingComponents ? missingWarnings.join('; ') : undefined;
+  const isComplete =
+    formatifAverage !== undefined &&
+    hasBab &&
+    missingChapterCodes.length === 0 &&
+    hasSas;
 
   return {
     chapterScores: cleanChapterScores,
@@ -308,12 +458,16 @@ export function computeStudentReportScore(params: {
     filledChapterCount: filledChapterValues.length,
     totalChapterCount: chapters.length,
     sasScore: cleanSas,
+    formatifAverage,
+    sumatifAverage,
+    rawFinalScore,
     finalScore,
     predicate,
     breakdownText,
     missingWarnings,
     missingComponentNote,
     hasMissingComponents,
-    isComplete: chapters.length > 0 && missingChapterCodes.length === 0 && hasSas
+    isComplete,
+    completenessStatus: isComplete ? 'LENGKAP' : 'BELUM_LENGKAP'
   };
 }

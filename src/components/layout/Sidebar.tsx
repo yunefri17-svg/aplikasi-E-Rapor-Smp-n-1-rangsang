@@ -63,6 +63,7 @@ export type MenuId =
   | 'manajemen-pengguna'
   | 'asesmen-formatif'
   | 'asesmen-sumatif'
+  | 'pengolahan-nilai-tabel'
   | 'kktp-config'
   | 'pengolahan-nilai-akhir'
   | 'kokurikuler-kelompok'
@@ -142,7 +143,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'kktp-config', label: '12. Konfigurasi KKTP', icon: Settings, roles: ['admin', 'guru', 'walikelas'] },
         { id: 'asesmen-formatif', label: '13. Asesmen Formatif', icon: ClipboardList, roles: ['admin', 'guru', 'walikelas'] },
         { id: 'asesmen-sumatif', label: '14. Asesmen Sumatif', icon: Award, roles: ['admin', 'guru', 'walikelas'] },
-        { id: 'pengolahan-nilai-akhir', label: '15. Pengolahan Nilai Akhir', icon: Calculator, roles: ['admin', 'guru', 'walikelas'] }
+        { id: 'pengolahan-nilai-tabel', label: '15. Pengolahan Nilai (Tabel)', icon: FileSpreadsheet, roles: ['admin', 'guru', 'walikelas', 'kepsek'] },
+        { id: 'pengolahan-nilai-akhir', label: '16. Pengolahan Nilai Akhir', icon: Calculator, roles: ['admin', 'guru', 'walikelas'] }
       ]
     },
     {

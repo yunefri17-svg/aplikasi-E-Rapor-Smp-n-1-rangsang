@@ -11,32 +11,51 @@ try {
   // Ignore if unsupported
 }
 
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write'
+}
+
 export interface FirestoreErrorInfo {
   error: string;
-  operation: string;
-  path: string;
+  operationType: OperationType | string;
+  path: string | null;
   authInfo: {
     userId?: string;
-    email?: string;
+    email?: string | null;
+    emailVerified?: boolean;
+    isAnonymous?: boolean;
     role?: string;
+    providerInfo?: { providerId: string; email?: string | null }[];
   };
 }
 
 export function handleFirestoreError(
   error: unknown,
-  operation: string,
-  path: string,
+  operation: OperationType | string,
+  path: string | null,
   currentUser?: { id?: string; email?: string; role?: string }
 ): never {
+  const fbUser = auth?.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
-    operation,
+    operationType: operation,
     path,
     authInfo: {
-      userId: currentUser?.id,
-      email: currentUser?.email,
+      userId: fbUser?.uid || currentUser?.id,
+      email: fbUser?.email || currentUser?.email || null,
+      emailVerified: fbUser?.emailVerified || false,
+      isAnonymous: fbUser?.isAnonymous ?? true,
       role: currentUser?.role,
-    },
+      providerInfo: (fbUser?.providerData || []).map((p) => ({
+        providerId: p.providerId,
+        email: p.email
+      }))
+    }
   };
   console.error('[Firestore Error]', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));

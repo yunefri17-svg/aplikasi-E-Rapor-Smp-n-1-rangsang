@@ -45,8 +45,12 @@ import {
   KokurikulerActivity,
   KokurikulerScore,
   KokurikulerDescription,
-  AssessmentPolicyConfig
+  AssessmentPolicyConfig,
+  SummativeAssessmentPlan,
+  SaveOperationResult
 } from '../types/erapor';
+import { sanitizeUserForPublicProfile } from './authService';
+import { detectScoreServerConflict } from '../utils/authorizationGuard';
 import { SubjectDescriptionBank, mergeDescriptionBankWithDefaults } from '../utils/descriptionBank';
 import { normalizeAssessmentPolicy } from '../utils/tpAnalysisAndDescription';
 import { sortClassrooms } from '../utils/classroomSort';
@@ -573,6 +577,11 @@ export async function syncAllToFirestore(
         assessmentOps.push({ ref: doc(db, 'summative_chapters', sanitizeDocId(ch.id)), data: ch });
       }
     });
+    (dbData.summativePlans || []).forEach((pl) => {
+      if (!isEntityDeleted('summative_plans', pl.id) && !isEntityDeleted('summativePlans', pl.id)) {
+        assessmentOps.push({ ref: doc(db, 'summative_plans', sanitizeDocId(pl.id)), data: pl });
+      }
+    });
     dbData.formativeAssessments.forEach((fa) => {
       if (!isEntityDeleted('formative_assessments', fa.id)) {
         assessmentOps.push({ ref: doc(db, 'formative_assessments', sanitizeDocId(fa.id)), data: fa });
@@ -613,6 +622,10 @@ export async function syncAllToFirestore(
     dbData.users.forEach((u) => {
       if (!isEntityDeleted('users', u.id)) {
         reportOps.push({ ref: doc(db, 'users', sanitizeDocId(u.id)), data: u });
+        reportOps.push({
+          ref: doc(db, 'user_profiles', sanitizeDocId(u.id)),
+          data: sanitizeUserForPublicProfile(u)
+        });
       }
     });
     if (dbData.academicYears) {
@@ -826,7 +839,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       kokurikulerDescriptionsSnap,
       descriptionBankDoc,
       assessmentPolicyDoc,
-      chaptersSnap
+      chaptersSnap,
+      summativePlansSnap
     ] = await Promise.all([
       getDoc(doc(db, 'schools', 'smpn1rangsang')),
       getDoc(doc(db, 'application_settings', 'tombstones')).catch(() => null),
@@ -855,7 +869,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       getDocs(collection(db, 'kokurikuler_descriptions')).catch(() => null),
       getDoc(doc(db, 'application_settings', 'description_bank')).catch(() => null),
       getDoc(doc(db, 'application_settings', 'assessment_policy')).catch(() => null),
-      getDocs(collection(db, 'summative_chapters')).catch(() => null)
+      getDocs(collection(db, 'summative_chapters')).catch(() => null),
+      getDocs(collection(db, 'summative_plans')).catch(() => null)
     ]);
 
     if (tombstonesDoc && (tombstonesDoc as any).exists && (tombstonesDoc as any).exists()) {
@@ -878,6 +893,8 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       !scoresSnap.empty ||
       !formativeSnap.empty ||
       !summativeSnap.empty ||
+      (chaptersSnap && !chaptersSnap.empty) ||
+      (summativePlansSnap && !summativePlansSnap.empty) ||
       (kokurikulerGroupsSnap && !kokurikulerGroupsSnap.empty);
 
     if (!hasAnyCloudData) {
@@ -911,6 +928,7 @@ export async function fetchFromFirestore(): Promise<Partial<AppDatabase> | null>
       users: usersSnap.docs.map((d) => d.data() as User),
       teachingAssignments: teachingAssignmentsSnap.docs.map((d) => d.data() as TeachingAssignment),
       ...(chaptersSnap ? { learningChapters: chaptersSnap.docs.map((d) => d.data() as LearningChapter) } : {}),
+      ...(summativePlansSnap ? { summativePlans: summativePlansSnap.docs.map((d) => d.data() as SummativeAssessmentPlan) } : {}),
       formativeAssessments: formativeSnap.docs.map((d) => d.data() as FormativeAssessment),
       summativeAssessments: summativeSnap.docs.map((d) => d.data() as SummativeAssessment),
       kktpConfigs: kktpSnap.docs.map((d) => d.data() as KKTPConfig),
@@ -999,6 +1017,7 @@ export interface FirestoreRealtimePayload {
   scores?: AssessmentScore[]; 
   notifications?: AppNotification[];
   learningChapters?: LearningChapter[];
+  summativePlans?: SummativeAssessmentPlan[];
   formativeAssessments?: FormativeAssessment[];
   summativeAssessments?: SummativeAssessment[];
   kktpConfigs?: KKTPConfig[];
@@ -1079,55 +1098,40 @@ export function listenToFirestoreRealtime(
     );
   };
 
+  // Spark Free-Tier Quota Optimization:
+  // Listen only to 10 operational collections rather than 33 parallel listeners.
+  // Static/master collections load via initial fetchFromFirestore() and manual sync.
   const unsubscribers = [
     genericListener('assessment_scores', 'scores'),
     genericListener('notifications', 'notifications'),
+    genericListener('assessments', 'learningObjectives'),
     genericListener('summative_chapters', 'learningChapters'),
+    genericListener('summative_plans', 'summativePlans'),
     genericListener('formative_assessments', 'formativeAssessments'),
     genericListener('summative_assessments', 'summativeAssessments'),
-    genericListener('kktp_configs', 'kktpConfigs'),
-    genericListener('final_score_configs', 'finalScoreConfigs'),
-    genericListener('students', 'students'),
-    genericListener('teachers', 'teachers'),
-    genericListener('classrooms', 'classrooms'),
-    genericListener('subjects', 'subjects'),
     genericListener('teaching_assignments', 'teachingAssignments'),
-    genericListener('assessments', 'learningObjectives'),
-    genericListener('curricula', 'curricula'),
-    genericListener('users', 'users'),
-    genericListener('attendance', 'attendance'),
-    genericListener('homeroom_notes', 'homeroomNotes'),
-    genericListener('schools', 'schoolProfile'),
-    genericListener('extracurriculars', 'extracurriculars'),
-    genericListener('student_extracurriculars', 'studentExtracurriculars'),
-    genericListener('academic_years', 'academicYears'),
-    genericListener('student_mutations', 'studentMutations'),
-    genericListener('student_achievements', 'studentAchievements'),
-    genericListener('kokurikuler_projects', 'kokurikulerProjects'),
-    genericListener('kokurikuler_dimensions', 'kokurikulerDimensions'),
-    genericListener('kokurikuler_themes', 'kokurikulerThemes'),
-    genericListener('kokurikuler_groups', 'kokurikulerGroups'),
-    genericListener('kokurikuler_activities', 'kokurikulerActivities'),
-    genericListener('kokurikuler_scores', 'kokurikulerScores'),
-    genericListener('kokurikuler_descriptions', 'kokurikulerDescriptions'),
-    onSnapshot(doc(db, 'application_settings', 'tombstones'), (snap) => {
-      if (snap.exists()) {
-        updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
-      }
-    }),
-    onSnapshot(doc(db, 'application_settings', 'description_bank'), (snap) => {
-      if (snap.exists()) {
-        const items = snap.data()?.items;
-        if (Array.isArray(items) && items.length > 0) {
-          onDataUpdate({ descriptionBank: mergeDescriptionBankWithDefaults(items as SubjectDescriptionBank[]) });
+    onSnapshot(
+      doc(db, 'application_settings', 'tombstones'),
+      (snap) => {
+        if (snap.exists()) {
+          updateTombstonesFromCloud(snap.data() as Record<string, string[]>);
         }
+      },
+      (err) => {
+        if (isQuotaExceededError(err)) markQuotaExceeded();
       }
-    }),
-    onSnapshot(doc(db, 'application_settings', 'assessment_policy'), (snap) => {
-      if (snap.exists()) {
-        onDataUpdate({ assessmentPolicy: normalizeAssessmentPolicy(snap.data() as AssessmentPolicyConfig) });
+    ),
+    onSnapshot(
+      doc(db, 'application_settings', 'assessment_policy'),
+      (snap) => {
+        if (snap.exists()) {
+          onDataUpdate({ assessmentPolicy: normalizeAssessmentPolicy(snap.data() as AssessmentPolicyConfig) });
+        }
+      },
+      (err) => {
+        if (isQuotaExceededError(err)) markQuotaExceeded();
       }
-    })
+    )
   ];
 
   return () => {
@@ -1136,48 +1140,168 @@ export function listenToFirestoreRealtime(
 }
 
 /**
- * Directly save updated scores and notification to Cloud Firestore in real time.
+ * Checks whether any pending score document was updated more recently on the server
+ * by another editor since this client loaded it.
+ */
+export async function checkScoresConflictBeforeSave(
+  scores: AssessmentScore[],
+  baseUpdatedAtById: Record<string, string>,
+  currentUserId?: string
+): Promise<{ hasConflict: boolean; conflicts: { id: string; message: string; serverUpdatedAt?: string }[] }> {
+  const conflicts: { id: string; message: string; serverUpdatedAt?: string }[] = [];
+  if (isCloudQuotaExhausted || scores.length === 0 || Object.keys(baseUpdatedAtById).length === 0) {
+    return { hasConflict: false, conflicts };
+  }
+
+  // Only inspect scores where client recorded a base timestamp and batch is compact (<= 45 students/class)
+  const checkTargets = scores.filter((sc) => Boolean(baseUpdatedAtById[sc.id])).slice(0, 45);
+  await Promise.all(
+    checkTargets.map(async (sc) => {
+      try {
+        const snap = await getDocFromServer(doc(db, 'assessment_scores', sanitizeDocId(sc.id)));
+        if (!snap.exists()) return;
+        const serverScore = snap.data() as AssessmentScore;
+        const conflict = detectScoreServerConflict({
+          localBaseUpdatedAt: baseUpdatedAtById[sc.id],
+          serverScore,
+          currentUserId
+        });
+        if (conflict.hasConflict && conflict.message) {
+          conflicts.push({
+            id: sc.id,
+            message: conflict.message,
+            serverUpdatedAt: conflict.serverUpdatedAt
+          });
+        }
+      } catch {
+        // Offline or transient read miss handled gracefully without false positive conflict
+      }
+    })
+  );
+
+  return { hasConflict: conflicts.length > 0, conflicts };
+}
+
+/**
+ * Directly save updated scores and optional notification to Cloud Firestore.
+ * Uses bounded writeBatch chunks (<= 350 ops), optional server conflict guard,
+ * and honest server confirmation status (never reports server success when offline/quota-exceeded/failed).
  */
 export async function saveScoresToFirestoreDirect(
   scores: AssessmentScore[],
-  notification?: AppNotification
-): Promise<boolean> {
-  // If cloud quota reached, data is already persisted in localStorage via saveDatabase
+  notification?: AppNotification,
+  options?: {
+    baseUpdatedAtById?: Record<string, string>;
+    currentUserId?: string;
+    checkConflicts?: boolean;
+  }
+): Promise<SaveOperationResult<AssessmentScore>> {
   if (isCloudQuotaExhausted) {
     updateSyncState({
       status: 'quota_exceeded',
       quotaExceeded: true,
-      message: 'Nilai tersimpan aman di browser (Penyimpanan Lokal Aktif).'
+      message: 'Batas kuota harian Cloud Firebase tercapai. Nilai hanya tersimpan lokal di browser.'
     });
-    return true;
+    return {
+      success: false,
+      savedToServer: false,
+      status: 'LOCAL_ONLY_QUOTA',
+      count: 0,
+      quotaExceeded: true,
+      message: 'Kuota harian Cloud Firebase tercapai. Data hanya tersimpan di browser dan BELUM masuk ke server.'
+    };
   }
 
   try {
     await ensureFirebaseAuth();
-    const batch = writeBatch(db);
 
-    scores.forEach((sc) => {
-      batch.set(doc(db, 'assessment_scores', sanitizeDocId(sc.id)), cleanForFirestore(sc), { merge: true });
-    });
-
-    if (notification) {
-      batch.set(doc(db, 'notifications', sanitizeDocId(notification.id)), cleanForFirestore(notification), { merge: true });
+    if (options?.checkConflicts && options.baseUpdatedAtById) {
+      const conflictRes = await checkScoresConflictBeforeSave(
+        scores,
+        options.baseUpdatedAtById,
+        options.currentUserId
+      );
+      if (conflictRes.hasConflict) {
+        const firstConflict = conflictRes.conflicts[0];
+        updateSyncState({
+          status: 'error',
+          message: firstConflict.message
+        });
+        return {
+          success: false,
+          savedToServer: false,
+          status: 'CONFLICT_DETECTED',
+          conflictDetected: true,
+          count: 0,
+          message: `${conflictRes.conflicts.length} data nilai mengalami konflik pembaruan server: ${firstConflict.message}`,
+          error: firstConflict.message
+        };
+      }
     }
 
-    await batch.commit();
+    const BATCH_LIMIT = notification ? 349 : 350;
+    let savedCount = 0;
+
+    if (scores.length === 0 && notification) {
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'notifications', sanitizeDocId(notification.id)), cleanForFirestore(notification), { merge: true });
+      await withTimeout(batch.commit(), 20000);
+    } else {
+      for (let i = 0; i < scores.length; i += BATCH_LIMIT) {
+        const chunk = scores.slice(i, i + BATCH_LIMIT);
+        const batch = writeBatch(db);
+        chunk.forEach((sc) => {
+          batch.set(doc(db, 'assessment_scores', sanitizeDocId(sc.id)), cleanForFirestore(sc), { merge: true });
+        });
+        const isLastChunk = i + BATCH_LIMIT >= scores.length;
+        if (notification && isLastChunk) {
+          batch.set(doc(db, 'notifications', sanitizeDocId(notification.id)), cleanForFirestore(notification), { merge: true });
+        }
+        await withTimeout(batch.commit(), 20000);
+        savedCount += chunk.length;
+      }
+    }
+
+    const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     updateSyncState({
       status: 'synced',
-      lastSyncTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      message: 'Nilai & Notifikasi berhasil disinkronkan ke Cloud Firestore'
+      lastSyncTime: nowStr,
+      message: `${savedCount} data nilai berhasil tersimpan di server Firestore (${nowStr})`
     });
-    return true;
+    return {
+      success: true,
+      savedToServer: true,
+      status: 'SAVED_SERVER',
+      count: savedCount,
+      message: `${savedCount} data nilai berhasil tersimpan di server.`,
+      timestamp: new Date().toISOString()
+    };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
-      markQuotaExceeded(err?.message);
-      return true; // Local persistence has already succeeded
+      await markQuotaExceeded(err?.message);
+      return {
+        success: false,
+        savedToServer: false,
+        status: 'LOCAL_ONLY_QUOTA',
+        count: 0,
+        quotaExceeded: true,
+        message: 'Batas kuota harian Firebase tercapai. Data hanya tersimpan lokal dan gagal masuk ke server.',
+        error: err?.message || 'quota-exceeded'
+      };
     }
-    console.warn('Direct score push warning:', err?.message || err);
-    return false;
+    const errMsg = err?.message || String(err);
+    updateSyncState({
+      status: 'error',
+      message: `Gagal menyimpan nilai ke server: ${errMsg}`
+    });
+    return {
+      success: false,
+      savedToServer: false,
+      status: 'FAILED_SERVER',
+      count: 0,
+      message: `Gagal menyimpan data ke server Firestore: ${errMsg}`,
+      error: errMsg
+    };
   }
 }
 
@@ -1189,9 +1313,14 @@ export async function surgicalSync(
   collectionName: string,
   docId: string,
   data: any
-): Promise<{ success: boolean; error?: string; quotaExceeded?: boolean }> {
+): Promise<{ success: boolean; savedToServer?: boolean; error?: string; quotaExceeded?: boolean }> {
   if (isCloudQuotaExhausted) {
-    return { success: true, quotaExceeded: true };
+    return {
+      success: false,
+      savedToServer: false,
+      quotaExceeded: true,
+      error: 'Kuota harian Cloud Firebase tercapai. Data tersimpan lokal di browser.'
+    };
   }
 
   try {
@@ -1205,28 +1334,49 @@ export async function surgicalSync(
       message: `Pembaruan ${collectionName} berhasil disinkronkan.`
     });
     
-    return { success: true };
+    return { success: true, savedToServer: true };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
       await markQuotaExceeded(err?.message);
-      return { success: true, quotaExceeded: true };
+      return {
+        success: false,
+        savedToServer: false,
+        quotaExceeded: true,
+        error: 'Kuota harian Cloud Firebase tercapai. Data gagal masuk ke server.'
+      };
     }
     console.warn(`Surgical sync failed for ${collectionName}/${docId}:`, err);
-    return { success: false, error: err?.message || String(err) };
+    return { success: false, savedToServer: false, error: err?.message || String(err) };
   }
 }
 
 /**
  * Quota-efficient batch write to Cloud Firestore (chunks up to 350 docs per commit).
- * Prevents firing N separate writes + full-DB re-upload when saving class assessments.
+ * Honestly reports server status via SaveOperationResult.
  */
 export async function saveBatchToFirestoreDirect<T extends { id: string }>(
   collectionName: string,
   items: T[]
-): Promise<{ success: boolean; count: number; error?: string; quotaExceeded?: boolean }> {
-  if (items.length === 0) return { success: true, count: 0 };
+): Promise<SaveOperationResult<T>> {
+  if (items.length === 0) {
+    return {
+      success: true,
+      savedToServer: true,
+      status: 'SAVED_SERVER',
+      count: 0,
+      message: 'Tidak ada data yang perlu disimpan ke server.'
+    };
+  }
   if (isCloudQuotaExhausted) {
-    return { success: true, count: 0, quotaExceeded: true };
+    return {
+      success: false,
+      savedToServer: false,
+      status: 'LOCAL_ONLY_QUOTA',
+      count: 0,
+      quotaExceeded: true,
+      message: 'Batas kuota harian Cloud Firebase tercapai. Data hanya tersimpan di browser.',
+      error: 'quota-exceeded'
+    };
   }
 
   try {
@@ -1246,20 +1396,47 @@ export async function saveBatchToFirestoreDirect<T extends { id: string }>(
       totalSaved += chunk.length;
     }
 
+    const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     updateSyncState({
       status: 'synced',
-      lastSyncTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      message: `${totalSaved} data ${collectionName} berhasil disinkronkan.`
+      lastSyncTime: nowStr,
+      message: `${totalSaved} data ${collectionName} berhasil tersimpan di server (${nowStr}).`
     });
 
-    return { success: true, count: totalSaved };
+    return {
+      success: true,
+      savedToServer: true,
+      status: 'SAVED_SERVER',
+      count: totalSaved,
+      message: `${totalSaved} data ${collectionName} berhasil tersimpan di server.`,
+      timestamp: new Date().toISOString()
+    };
   } catch (err: any) {
     if (isQuotaExceededError(err)) {
       await markQuotaExceeded(err?.message);
-      return { success: true, count: 0, quotaExceeded: true };
+      return {
+        success: false,
+        savedToServer: false,
+        status: 'LOCAL_ONLY_QUOTA',
+        count: 0,
+        quotaExceeded: true,
+        message: 'Batas kuota harian Cloud Firebase tercapai. Data gagal masuk ke server.',
+        error: err?.message || 'quota-exceeded'
+      };
     }
-    console.warn(`Batch sync warning for ${collectionName}:`, err);
-    return { success: false, count: 0, error: err?.message || String(err) };
+    const errMsg = err?.message || String(err);
+    updateSyncState({
+      status: 'error',
+      message: `Gagal menyimpan batch ${collectionName} ke server: ${errMsg}`
+    });
+    return {
+      success: false,
+      savedToServer: false,
+      status: 'FAILED_SERVER',
+      count: 0,
+      message: `Gagal menyimpan ${collectionName} ke server: ${errMsg}`,
+      error: errMsg
+    };
   }
 }
 

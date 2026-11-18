@@ -117,7 +117,7 @@ export const DataKurikulumView: React.FC<DataKurikulumViewProps> = ({
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-relaxed italic">
-                  Rumus Nilai Akhir = ({cur.formatifWeight}% &times; Rata-rata Sumatif Materi) + ({cur.sumatifWeight}% &times; Nilai Sumatif Akhir Semester).
+                  Rumus Nilai Akhir = ({cur.formatifWeight}% &times; Rata-rata Formatif) + ({cur.sumatifWeight}% &times; Rata-rata Sumatif).
                 </p>
               </div>
 

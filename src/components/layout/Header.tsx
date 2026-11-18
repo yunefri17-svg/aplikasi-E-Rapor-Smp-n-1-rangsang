@@ -4,8 +4,11 @@ import {
   User,
   UserRole,
   AppNotification,
-  DutyMode
+  DutyMode,
+  AuthSessionContext,
+  SaveOperationResult
 } from '../../types/erapor';
+import { getAuthVerificationNotice } from '../../utils/authorizationGuard';
 import {
   Bell,
   Calendar,
@@ -50,6 +53,8 @@ interface HeaderProps {
   onTriggerSync?: () => void;
   onReconnect?: () => void;
   onLogout?: () => void;
+  authContext?: AuthSessionContext | null;
+  lastSaveStatus?: SaveOperationResult | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -68,7 +73,9 @@ export const Header: React.FC<HeaderProps> = ({
   cloudSyncState,
   onTriggerSync,
   onReconnect,
-  onLogout
+  onLogout,
+  authContext,
+  lastSaveStatus
 }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -106,6 +113,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const badge = roleBadge(currentUser.role);
+  const authNotice = getAuthVerificationNotice(authContext, currentUser);
 
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:hidden">
@@ -240,6 +248,41 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
+          {/* Explicit Server Save Status Indicator */}
+          {lastSaveStatus && lastSaveStatus.status !== 'IDLE' && (
+            <div
+              className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold ${
+                lastSaveStatus.status === 'SAVING'
+                  ? 'bg-blue-50 text-blue-800 border-blue-200 animate-pulse'
+                  : lastSaveStatus.status === 'SAVED_SERVER'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : lastSaveStatus.status === 'LOCAL_ONLY_QUOTA'
+                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                  : 'bg-rose-50 text-rose-800 border-rose-300'
+              }`}
+              title={lastSaveStatus.message || lastSaveStatus.error || ''}
+            >
+              {lastSaveStatus.status === 'SAVING' ? (
+                <Clock className="w-3.5 h-3.5 text-blue-600" />
+              ) : lastSaveStatus.status === 'SAVED_SERVER' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+              )}
+              <span>
+                {lastSaveStatus.status === 'SAVING'
+                  ? 'MENYIMPAN...'
+                  : lastSaveStatus.status === 'SAVED_SERVER'
+                  ? 'BERHASIL TERSIMPAN DI SERVER'
+                  : lastSaveStatus.status === 'LOCAL_ONLY_QUOTA'
+                  ? 'TERSIMPAN LOKAL (KUOTA)'
+                  : lastSaveStatus.status === 'CONFLICT_DETECTED'
+                  ? 'KONFLIK SERVER'
+                  : 'GAGAL DISIMPAN'}
+              </span>
+            </div>
+          )}
+
           {/* Notification Bell */}
           <div className="relative">
             <button
@@ -368,9 +411,22 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                   )}
 
-                  <div className="flex items-center gap-1.5 text-[10px] text-emerald-700 bg-emerald-50/80 p-2 rounded-lg border border-emerald-200/80">
-                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                    <span>Sesi Terotentikasi Firebase Auth</span>
+                  <div
+                    className={`flex items-start gap-1.5 text-[10px] p-2 rounded-lg border ${
+                      authNotice.isVerified
+                        ? 'text-emerald-700 bg-emerald-50/80 border-emerald-200/80'
+                        : 'text-amber-800 bg-amber-50/90 border-amber-200'
+                    }`}
+                  >
+                    {authNotice.isVerified ? (
+                      <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600" />
+                    )}
+                    <div className="space-y-0.5">
+                      <div className="font-bold">{authNotice.label}</div>
+                      {authNotice.detail && <div className="leading-snug opacity-90">{authNotice.detail}</div>}
+                    </div>
                   </div>
                 </div>
 

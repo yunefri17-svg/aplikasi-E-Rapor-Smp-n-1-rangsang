@@ -96,6 +96,7 @@ export function filterObjectivesForContext(
   params: {
     subjectId: string;
     gradeLevel?: '7' | '8' | '9' | string;
+    classId?: string;
     semester: 'Ganjil' | 'Genap';
     academicYear?: string;
   }
@@ -104,6 +105,7 @@ export function filterObjectivesForContext(
     if (tp.subjectId !== params.subjectId) return false;
     if (tp.semester !== params.semester) return false;
     if (params.gradeLevel && String(tp.gradeLevel) !== String(params.gradeLevel)) return false;
+    if (tp.classId && params.classId && tp.classId !== params.classId) return false;
     if (tp.academicYear && params.academicYear && tp.academicYear !== params.academicYear) {
       return false;
     }

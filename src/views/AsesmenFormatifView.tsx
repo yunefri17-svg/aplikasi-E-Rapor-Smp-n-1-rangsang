@@ -1,737 +1,814 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   AssessmentPolicyConfig,
+  AssessmentScore,
+  AuthSessionContext,
   Classroom,
   FormativeAssessment,
-  FormativeMasteryStatus,
-  FormativeTechnique,
+  LearningChapter,
   LearningObjective,
-  Student,
   Subject,
+  SummativeAssessment,
+  SummativeAssessmentPlan,
   Teacher,
   TeachingAssignment,
   User
 } from '../types/erapor';
 import {
-  ClipboardCheck,
-  Plus,
-  Calendar,
-  MessageSquare,
-  UserCheck,
-  Check,
-  Save,
-  Info,
-  Clock,
-  History,
   Target,
-  Lock,
-  Trash2,
+  Plus,
   Edit3,
-  X
+  Trash2,
+  Save,
+  X,
+  Search,
+  Lock,
+  Info,
+  CheckCircle2,
+  AlertTriangle,
+  BookOpen,
+  ShieldAlert
 } from 'lucide-react';
-import { getAccessibleClassrooms, getAccessibleStudents } from '../services/storage';
-import {
-  filterObjectivesForContext,
-  getFormativeTpIds,
-  isPeriodInputLocked
-} from '../utils/tpAnalysisAndDescription';
-import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortSubjects } from '../utils/subjectSort';
+import { getAvailableAcademicYears } from '../utils/academicYear';
+import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
+import { filterObjectivesForContext } from '../utils/tpAnalysisAndDescription';
+import { suggestNextTpCode } from '../utils/assessmentCalculation';
+import {
+  authorizeSubjectAssessmentWrite,
+  checkLearningObjectiveInUse,
+  getAuthorizedSubjectClassIds
+} from '../utils/authorizationGuard';
 
 interface AsesmenFormatifViewProps {
   classrooms: Classroom[];
-  students: Student[];
   subjects: Subject[];
   learningObjectives: LearningObjective[];
-  formativeAssessments: FormativeAssessment[];
-  onSaveAssessment: (assessment: FormativeAssessment) => void;
-  onSaveAssessmentsBatch?: (assessments: FormativeAssessment[]) => void;
-  onDeleteAssessment: (id: string) => void;
+  learningChapters?: LearningChapter[];
+  summativePlans?: SummativeAssessmentPlan[];
+  formativeAssessments?: FormativeAssessment[];
+  summativeAssessments?: SummativeAssessment[];
+  scores?: AssessmentScore[];
+  onSaveObjective: (obj: LearningObjective) => { success?: boolean; error?: string } | void;
+  onDeleteObjective: (id: string) => Promise<{ success?: boolean; error?: string } | void> | void;
   currentUser: User;
   teachingAssignments: TeachingAssignment[];
   teachers?: Teacher[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
   assessmentPolicy?: AssessmentPolicyConfig;
+  authContext?: AuthSessionContext | null;
 }
 
 export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
   classrooms,
-  students,
   subjects,
   learningObjectives,
-  formativeAssessments,
-  onSaveAssessment,
-  onSaveAssessmentsBatch,
-  onDeleteAssessment,
+  learningChapters = [],
+  summativePlans = [],
+  formativeAssessments = [],
+  summativeAssessments = [],
+  scores = [],
+  onSaveObjective,
+  onDeleteObjective,
   currentUser,
   teachingAssignments,
   teachers = [],
   academicYear,
   semester,
-  assessmentPolicy
+  assessmentPolicy,
+  authContext
 }) => {
-  const isWaliKelasReadOnly = currentUser.role === 'walikelas';
-  const isLocked =
-    currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
-  const isReadOnly = isLocked || isWaliKelasReadOnly;
+  const [selectedYear, setSelectedYear] = useState<string>(academicYear);
+  const [selectedSemester, setSelectedSemester] = useState<'Ganjil' | 'Genap'>(semester);
 
-  const visibleClassrooms = useMemo(
-    () => sortClassrooms(getAccessibleClassrooms(currentUser, classrooms)),
-    [currentUser, classrooms]
-  );
+  useEffect(() => {
+    setSelectedYear(academicYear);
+  }, [academicYear]);
+
+  useEffect(() => {
+    setSelectedSemester(semester);
+  }, [semester]);
+
+  const yearOptions = useMemo(() => {
+    const baseYears = getAvailableAcademicYears(2023, 6);
+    const existingYears = learningObjectives
+      .map((tp) => tp.academicYear)
+      .filter((y): y is string => Boolean(y));
+    return Array.from(new Set([academicYear, ...baseYears, ...existingYears])).sort().reverse();
+  }, [academicYear, learningObjectives]);
+
   const visibleSubjects = useMemo(() => {
+    if (currentUser.role === 'admin' || currentUser.role === 'kepsek') {
+      return sortSubjects(subjects);
+    }
+    if (currentUser.role === 'walikelas') {
+      return sortSubjects(subjects);
+    }
     return getVisibleSubjectsForUser({
       currentUser,
       subjects,
       teachingAssignments,
       teachers,
-      includeAllForWaliKelas: true
+      includeAllForWaliKelas: false
     });
-  }, [subjects, teachingAssignments, teachers, currentUser]);
+  }, [currentUser, subjects, teachingAssignments, teachers]);
 
-  const [selectedClassId, setSelectedClassId] = useState(visibleClassrooms[0]?.id || '');
-  const [selectedSubjectId, setSelectedSubjectId] = useState(visibleSubjects[0]?.id || '');
-  const [selectedTpIds, setSelectedTpIds] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'input' | 'history'>('input');
-
-  useEffect(() => {
-    if (visibleClassrooms.length > 0 && !visibleClassrooms.some((c) => c.id === selectedClassId)) {
-      setSelectedClassId(visibleClassrooms[0].id);
-    }
-  }, [visibleClassrooms, selectedClassId]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(visibleSubjects[0]?.id || '');
 
   useEffect(() => {
     if (visibleSubjects.length > 0 && !visibleSubjects.some((s) => s.id === selectedSubjectId)) {
       setSelectedSubjectId(visibleSubjects[0].id);
-    } else if (visibleSubjects.length === 0 && selectedSubjectId !== '') {
+    } else if (visibleSubjects.length === 0) {
       setSelectedSubjectId('');
     }
   }, [visibleSubjects, selectedSubjectId]);
+
+  const visibleClassrooms = useMemo(() => {
+    const sorted = sortClassrooms(classrooms);
+    const authScope = getAuthorizedSubjectClassIds({
+      user: currentUser,
+      teachers,
+      teachingAssignments,
+      subjectId: selectedSubjectId || undefined,
+      academicYear: selectedYear,
+      semester: selectedSemester
+    });
+    if (authScope.allowAll) return sorted;
+    if (authScope.classIds.length > 0) {
+      return sorted.filter((c) => authScope.classIds.includes(c.id));
+    }
+    if (currentUser.role === 'walikelas' && currentUser.classId) {
+      return sorted.filter((c) => c.id === currentUser.classId);
+    }
+    return [];
+  }, [classrooms, currentUser, teachers, teachingAssignments, selectedSubjectId, selectedYear, selectedSemester]);
+
+  const [selectedClassId, setSelectedClassId] = useState<string>(visibleClassrooms[0]?.id || '');
+
+  useEffect(() => {
+    if (visibleClassrooms.length > 0 && !visibleClassrooms.some((c) => c.id === selectedClassId)) {
+      setSelectedClassId(visibleClassrooms[0].id);
+    } else if (visibleClassrooms.length === 0) {
+      setSelectedClassId('');
+    }
+  }, [visibleClassrooms, selectedClassId]);
 
   const selectedClassroom = useMemo(
     () => classrooms.find((c) => c.id === selectedClassId),
     [classrooms, selectedClassId]
   );
+  const selectedSubject = useMemo(
+    () => subjects.find((s) => s.id === selectedSubjectId),
+    [subjects, selectedSubjectId]
+  );
 
-  const filteredStudents = useMemo(() => {
-    return getAccessibleStudents(currentUser, students, selectedClassId);
-  }, [currentUser, students, selectedClassId]);
+  const writeAuth = useMemo(() => {
+    if (!selectedSubjectId || !selectedClassId) {
+      return {
+        allowed: false,
+        readOnly: true,
+        reason: 'Pilih Mata Pelajaran dan Kelas terlebih dahulu.'
+      };
+    }
+    return authorizeSubjectAssessmentWrite({
+      user: currentUser,
+      subjectId: selectedSubjectId,
+      classId: selectedClassId,
+      academicYear: selectedYear,
+      semester: selectedSemester,
+      teachers,
+      teachingAssignments,
+      assessmentPolicy,
+      authContext
+    });
+  }, [
+    currentUser,
+    selectedSubjectId,
+    selectedClassId,
+    selectedYear,
+    selectedSemester,
+    teachers,
+    teachingAssignments,
+    assessmentPolicy,
+    authContext
+  ]);
 
-  const relevantObjectives = useMemo(() => {
+  const contextObjectives = useMemo(() => {
+    if (!selectedSubjectId || !selectedClassroom) return [];
     return filterObjectivesForContext(learningObjectives, {
       subjectId: selectedSubjectId,
-      gradeLevel: selectedClassroom?.gradeLevel,
-      semester,
-      academicYear
+      gradeLevel: selectedClassroom.gradeLevel,
+      classId: selectedClassroom.id,
+      semester: selectedSemester,
+      academicYear: selectedYear
     });
-  }, [learningObjectives, selectedSubjectId, selectedClassroom?.gradeLevel, semester, academicYear]);
+  }, [learningObjectives, selectedSubjectId, selectedClassroom, selectedSemester, selectedYear]);
 
-  useEffect(() => {
-    setSelectedTpIds((prev) => {
-      const stillValid = prev.filter((id) => relevantObjectives.some((tp) => tp.id === id));
-      if (stillValid.length > 0) return stillValid;
-      return relevantObjectives[0]?.id ? [relevantObjectives[0].id] : [];
-    });
-  }, [relevantObjectives]);
-
-  // Input State
-  const [assessmentDate, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [technique, setTechnique] = useState<FormativeTechnique>('observasi');
-  const [masteryStatuses, setMasteryStatuses] = useState<Record<string, FormativeMasteryStatus | ''>>({});
-  const [diagnosticScores, setDiagnosticScores] = useState<Record<string, number | undefined>>({});
-  const [observations, setObservations] = useState<Record<string, string>>({});
-  const [feedbacks, setFeedbacks] = useState<Record<string, string>>({});
-  const [saveSuccess, setSaveSuccess] = useState(false);
-
-  // Edit Modal State
-  const [editingAssessment, setEditingAssessment] = useState<FormativeAssessment | null>(null);
-
-  const toggleTpSelection = (tpId: string) => {
-    setSelectedTpIds((prev) =>
-      prev.includes(tpId) ? prev.filter((id) => id !== tpId) : [...prev, tpId]
+  const [searchTerm, setSearchTerm] = useState('');
+  const displayedObjectives = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return contextObjectives;
+    return contextObjectives.filter(
+      (tp) =>
+        (tp.code || '').toLowerCase().includes(q) ||
+        (tp.description || '').toLowerCase().includes(q) ||
+        (tp.materi || '').toLowerCase().includes(q)
     );
+  }, [contextObjectives, searchTerm]);
+
+  const historicalFormativeCount = useMemo(() => {
+    if (!selectedSubjectId || !selectedClassId) return 0;
+    return formativeAssessments.filter(
+      (fa) =>
+        fa.subjectId === selectedSubjectId &&
+        fa.classId === selectedClassId &&
+        fa.semester === selectedSemester &&
+        (!fa.academicYear || fa.academicYear === selectedYear)
+    ).length;
+  }, [formativeAssessments, selectedSubjectId, selectedClassId, selectedSemester, selectedYear]);
+
+  // Add / Edit Form Modal State
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingTp, setEditingTp] = useState<LearningObjective | null>(null);
+  const [formCode, setFormCode] = useState('');
+  const [formMateri, setFormMateri] = useState('');
+  const [formDescription, setFormDescription] = useState('');
+  const [formScope, setFormScope] = useState<'grade' | 'class'>('grade');
+  const [feedbackBanner, setFeedbackBanner] = useState<{
+    type: 'success' | 'error' | 'warning';
+    text: string;
+  } | null>(null);
+  const [confirmDeleteTp, setConfirmDeleteTp] = useState<LearningObjective | null>(null);
+
+  const openCreateForm = () => {
+    if (!writeAuth.allowed) {
+      setFeedbackBanner({
+        type: 'warning',
+        text: writeAuth.reason || 'Anda tidak memiliki hak akses mengubah TP pada konteks ini.'
+      });
+      return;
+    }
+    const grade = selectedClassroom?.gradeLevel || '7';
+    setEditingTp(null);
+    setFormCode(suggestNextTpCode(contextObjectives, grade));
+    setFormMateri('');
+    setFormDescription('');
+    setFormScope('grade');
+    setFeedbackBanner(null);
+    setIsFormOpen(true);
   };
 
-  const handleSaveAll = () => {
-    if (isReadOnly) return;
-    if (selectedTpIds.length === 0) return;
+  const openEditForm = (tp: LearningObjective) => {
+    if (!writeAuth.allowed) {
+      setFeedbackBanner({
+        type: 'warning',
+        text: writeAuth.reason || 'Mode Baca Saja aktif.'
+      });
+      return;
+    }
+    setEditingTp(tp);
+    setFormCode(tp.code || '');
+    setFormMateri(tp.materi || '');
+    setFormDescription(tp.description || '');
+    setFormScope(tp.classId ? 'class' : 'grade');
+    setFeedbackBanner(null);
+    setIsFormOpen(true);
+  };
 
-    const batchList: FormativeAssessment[] = [];
-    filteredStudents.forEach((std) => {
-      const mStatus = masteryStatuses[std.id];
-      const diagScore = diagnosticScores[std.id];
-      const obs = (observations[std.id] || '').trim();
-      const fb = (feedbacks[std.id] || '').trim();
+  const handleSubmitTp = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!writeAuth.allowed || !selectedClassroom || !selectedSubjectId) {
+      setFeedbackBanner({
+        type: 'error',
+        text: writeAuth.reason || 'Hak akses tulis ditolak.'
+      });
+      return;
+    }
 
-      if (obs || fb || mStatus || diagScore !== undefined) {
-        const assessment: FormativeAssessment = {
-          id: `fa-${Date.now()}-${std.id}`,
-          studentId: std.id,
-          teacherId: currentUser.teacherId || 'admin',
-          subjectId: selectedSubjectId,
-          classId: selectedClassId,
-          tpId: selectedTpIds[0],
-          tpIds: selectedTpIds,
-          date: assessmentDate,
-          technique,
-          masteryStatus: mStatus || undefined,
-          score: diagScore,
-          observation: obs,
-          feedback: fb,
-          academicYear,
-          semester,
-          updatedAt: new Date().toISOString()
-        };
-        batchList.push(assessment);
-      }
+    const cleanCode = formCode.trim();
+    const cleanDesc = formDescription.trim();
+    const cleanMateri = formMateri.trim();
+
+    if (!cleanCode || !cleanDesc) {
+      setFeedbackBanner({
+        type: 'error',
+        text: 'Kode TP dan Deskripsi Tujuan Pembelajaran wajib diisi.'
+      });
+      return;
+    }
+
+    const duplicate = contextObjectives.find(
+      (tp) =>
+        tp.id !== editingTp?.id &&
+        tp.code.trim().toLowerCase() === cleanCode.toLowerCase()
+    );
+    if (duplicate) {
+      setFeedbackBanner({
+        type: 'error',
+        text: `Kode "${cleanCode}" sudah terdaftar pada mata pelajaran dan periode ini. Gunakan kode unik (misal: ${suggestNextTpCode(
+          contextObjectives,
+          selectedClassroom.gradeLevel
+        )}).`
+      });
+      return;
+    }
+
+    const newTp: LearningObjective = {
+      id: editingTp?.id || `tp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      subjectId: selectedSubjectId,
+      gradeLevel: selectedClassroom.gradeLevel,
+      ...(formScope === 'class' ? { classId: selectedClassroom.id } : {}),
+      semester: selectedSemester,
+      academicYear: selectedYear,
+      code: cleanCode,
+      ...(cleanMateri ? { materi: cleanMateri } : {}),
+      description: cleanDesc,
+      curriculumId: editingTp?.curriculumId || 'cur-merdeka',
+      teacherId: writeAuth.resolvedTeacherId || currentUser.teacherId || editingTp?.teacherId,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser.name
+    };
+
+    const res = onSaveObjective(newTp);
+    if (res && res.success === false) {
+      setFeedbackBanner({
+        type: 'error',
+        text: res.error || 'Gagal menyimpan Tujuan Pembelajaran.'
+      });
+      return;
+    }
+
+    setIsFormOpen(false);
+    setEditingTp(null);
+    setFeedbackBanner({
+      type: 'success',
+      text: `Tujuan Pembelajaran "${cleanCode}" berhasil disimpan untuk ${selectedSubject?.name || 'Mapel'} (${selectedClassroom.name}).`
     });
+  };
 
-    if (batchList.length > 0) {
-      if (onSaveAssessmentsBatch) {
-        onSaveAssessmentsBatch(batchList);
-      } else {
-        batchList.forEach((a) => onSaveAssessment(a));
-      }
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
-      setMasteryStatuses({});
-      setDiagnosticScores({});
-      setObservations({});
-      setFeedbacks({});
+  const handleRequestDeleteTp = (tp: LearningObjective) => {
+    if (!writeAuth.allowed) {
+      setFeedbackBanner({
+        type: 'warning',
+        text: writeAuth.reason || 'Mode Baca Saja aktif.'
+      });
+      return;
+    }
+    const usage = checkLearningObjectiveInUse({
+      tpId: tp.id,
+      learningChapters,
+      summativePlans,
+      formativeAssessments,
+      summativeAssessments,
+      scores
+    });
+    if (usage.inUse) {
+      setFeedbackBanner({
+        type: 'error',
+        text: usage.reason || `TP "${tp.code}" sedang digunakan dan tidak dapat dihapus.`
+      });
+      return;
+    }
+    setConfirmDeleteTp(tp);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteTp) return;
+    const target = confirmDeleteTp;
+    setConfirmDeleteTp(null);
+    const res = await onDeleteObjective(target.id);
+    if (res && res.success === false) {
+      setFeedbackBanner({
+        type: 'error',
+        text: res.error || `Gagal menghapus TP "${target.code}".`
+      });
+    } else {
+      setFeedbackBanner({
+        type: 'success',
+        text: `Tujuan Pembelajaran "${target.code}" berhasil dihapus.`
+      });
     }
   };
 
-  const techniques: { value: FormativeTechnique; label: string }[] = [
-    { value: 'observasi', label: 'Observasi' },
-    { value: 'tanya jawab', label: 'Tanya Jawab' },
-    { value: 'diskusi', label: 'Diskusi' },
-    { value: 'kuis', label: 'Kuis' },
-    { value: 'latihan', label: 'Latihan' },
-    { value: 'praktik', label: 'Praktik' },
-    { value: 'tugas', label: 'Tugas' }
-  ];
-
-  const historyData = useMemo(() => {
-    return formativeAssessments
-      .filter(
-        (a) =>
-          a.classId === selectedClassId &&
-          a.subjectId === selectedSubjectId &&
-          a.academicYear === academicYear &&
-          a.semester === semester
-      )
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [formativeAssessments, selectedClassId, selectedSubjectId, academicYear, semester]);
-
-  const handleUpdateEditingAssessment = () => {
-    if (!editingAssessment || isReadOnly) return;
-    onSaveAssessment(editingAssessment);
-    setEditingAssessment(null);
-  };
-
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <ClipboardCheck className="w-5 h-5 text-emerald-600" />
-            Asesmen Formatif (Berbasis Tujuan Pembelajaran)
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Catat perkembangan belajar siswa berdasarkan Tujuan Pembelajaran (TP) dengan skor angka (0–100), status ketercapaian, pengamatan, dan umpan balik.
-          </p>
+    <div className="space-y-6">
+      {/* Header Banner */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Target className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
+              Asesmen Formatif — Daftar Tujuan Pembelajaran (TP)
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 mt-0.5 leading-relaxed">
+              Menu ini khusus untuk mengelola daftar <strong>Tujuan Pembelajaran (TP)</strong> per tahun ajaran,
+              semester, kelas, dan mata pelajaran (tanpa input nilai peserta didik). TP yang dibuat di sini otomatis
+              tersedia di modul <strong>Asesmen Sumatif</strong>, <strong>Pengolahan Nilai Excel</strong>, dan{' '}
+              <strong>Deskripsi Rapor</strong>.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl">
-          <button
-            onClick={() => setViewMode('input')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              viewMode === 'input' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <Plus className="w-3.5 h-3.5" /> Input Baru
-          </button>
-          <button
-            onClick={() => setViewMode('history')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              viewMode === 'history' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <History className="w-3.5 h-3.5" /> Riwayat ({historyData.length})
-          </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {writeAuth.allowed ? (
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-2 shadow-xs transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tambah TP Baru</span>
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold">
+              <Lock className="w-3.5 h-3.5" />
+              <span>Mode Baca Saja</span>
+            </span>
+          )}
         </div>
       </div>
 
-      {isLocked && (
-        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2.5">
-          <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-          <span>
-            <strong>Periode Terkunci ({academicYear} {semester}):</strong> Input asesmen formatif dikunci sementara oleh Administrator.
-          </span>
-        </div>
-      )}
-
-      {isWaliKelasReadOnly && (
-        <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-center gap-2.5">
-          <Info className="w-4 h-4 text-blue-700 shrink-0" />
-          <span>
-            Mode pantau Wali Kelas: Anda dapat memantau riwayat formatif peserta didik di rombel Anda secara read-only.
-          </span>
-        </div>
-      )}
-
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* RBAC / Read-Only Notice */}
+      {!writeAuth.allowed && (
+        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+          <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1">Rombel</label>
-            <select
-              value={selectedClassId}
-              onChange={(e) => setSelectedClassId(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-            >
-              {visibleClassrooms.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <span className="font-bold block">Informasi Hak Akses:</span>
+            <span>{writeAuth.reason}</span>
           </div>
-          <div className="md:col-span-2">
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1 text-emerald-600">
-              Mata Pelajaran
-            </label>
-            {visibleSubjects.length === 0 ? (
-              <div className="flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-700">
-                <Info className="w-3.5 h-3.5" />
-                <span>
-                  Anda belum memiliki penugasan mengajar aktif di menu <strong>9. Penugasan Guru Mengajar</strong>.
-                </span>
-              </div>
+        </div>
+      )}
+
+      {/* Historical Formative Preservation Info */}
+      {historicalFormativeCount > 0 && (
+        <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-start gap-2.5">
+          <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            Terdapat <strong>{historicalFormativeCount}</strong> catatan asesmen formatif historis untuk kelas &
+            mapel ini yang tetap dipertahankan aman di database sebagai referensi arsip & modul deskripsi rapor.
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Banner */}
+      {feedbackBanner && (
+        <div
+          className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 ${
+            feedbackBanner.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : feedbackBanner.type === 'warning'
+              ? 'bg-amber-50 border-amber-200 text-amber-900'
+              : 'bg-rose-50 border-rose-200 text-rose-900'
+          }`}
+        >
+          <div className="flex items-center gap-2 font-semibold">
+            {feedbackBanner.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             ) : (
-              <select
-                value={selectedSubjectId}
-                onChange={(e) => setSelectedSubjectId(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none bg-white font-bold"
-              >
-                {visibleSubjects.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
             )}
+            <span>{feedbackBanner.text}</span>
           </div>
-          {viewMode === 'input' && (
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 ml-1">
-                Tanggal &amp; Teknik
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={assessmentDate}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="flex-1 px-2.5 py-2 text-xs rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                <select
-                  value={technique}
-                  onChange={(e) => setTechnique(e.target.value as FormativeTechnique)}
-                  className="flex-1 px-2.5 py-2 text-xs rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                >
-                  {techniques.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setFeedbackBanner(null)}
+            className="p-1 rounded-lg hover:bg-black/5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Context Filter Bar */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+        <div>
+          <label className="block font-bold text-slate-600 mb-1">Tahun Ajaran</label>
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500"
+          >
+            {yearOptions.map((yr) => (
+              <option key={yr} value={yr}>
+                {yr}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {viewMode === 'input' && (
-          <div className="pt-2 border-t border-slate-100">
-            <label className="block text-[10px] font-bold text-slate-600 uppercase mb-2">
-              Pilih Tujuan Pembelajaran (TP) yang Dinilai ({selectedTpIds.length} dipilih):
-            </label>
-            {relevantObjectives.length === 0 ? (
-              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                Belum ada Tujuan Pembelajaran untuk kelas {selectedClassroom?.gradeLevel || '-'} semester {semester}. Tambahkan terlebih dahulu di menu <strong>Data Pembelajaran (CP/TP)</strong>.
-              </div>
+        <div>
+          <label className="block font-bold text-slate-600 mb-1">Semester</label>
+          <select
+            value={selectedSemester}
+            onChange={(e) => setSelectedSemester(e.target.value as 'Ganjil' | 'Genap')}
+            className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500"
+          >
+            <option value="Ganjil">Semester Ganjil</option>
+            <option value="Genap">Semester Genap</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block font-bold text-slate-600 mb-1">Mata Pelajaran</label>
+          <select
+            value={selectedSubjectId}
+            onChange={(e) => setSelectedSubjectId(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500"
+          >
+            {visibleSubjects.length === 0 ? (
+              <option value="">Tidak ada mapel ditugaskan</option>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {relevantObjectives.map((tp) => {
-                  const checked = selectedTpIds.includes(tp.id);
+              visibleSubjects.map((sub) => (
+                <option key={sub.id} value={sub.id}>
+                  {sub.name}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+
+        <div>
+          <label className="block font-bold text-slate-600 mb-1">Kelas / Rombel</label>
+          <select
+            value={selectedClassId}
+            onChange={(e) => setSelectedClassId(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500"
+          >
+            {visibleClassrooms.length === 0 ? (
+              <option value="">Tidak ada kelas ditugaskan</option>
+            ) : (
+              visibleClassrooms.map((cls) => (
+                <option key={cls.id} value={cls.id}>
+                  Kelas {cls.name} (Tingkat {cls.gradeLevel})
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+
+        <div>
+          <label className="block font-bold text-slate-600 mb-1">Cari Kode / Deskripsi TP</label>
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Contoh: TP 7.1 atau Bilangan..."
+              className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 text-slate-800 focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Add / Edit TP Inline Panel */}
+      {isFormOpen && (
+        <form
+          onSubmit={handleSubmitTp}
+          className="bg-teal-50/50 rounded-2xl border border-teal-200 p-5 space-y-4 shadow-xs animate-in fade-in"
+        >
+          <div className="flex items-center justify-between pb-2 border-b border-teal-200/80">
+            <h3 className="text-sm font-extrabold text-teal-950 flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-teal-700" />
+              <span>
+                {editingTp ? `Edit Tujuan Pembelajaran (${editingTp.code})` : 'Tambah Tujuan Pembelajaran (TP) Baru'}
+              </span>
+            </h3>
+            <button
+              type="button"
+              onClick={() => {
+                setIsFormOpen(false);
+                setEditingTp(null);
+              }}
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-white cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                Kode TP <span className="text-rose-600">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={formCode}
+                onChange={(e) => setFormCode(e.target.value)}
+                placeholder="Contoh: TP 7.1"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold text-slate-900 focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Lingkup Kelas</label>
+              <select
+                value={formScope}
+                onChange={(e) => setFormScope(e.target.value as 'grade' | 'class')}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500"
+              >
+                <option value="grade">
+                  Semua Kelas Tingkat {selectedClassroom?.gradeLevel || '-'} (Standar)
+                </option>
+                <option value="class">Khusus Kelas {selectedClassroom?.name || '-'}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Materi / Topik (Opsional)</label>
+              <input
+                type="text"
+                value={formMateri}
+                onChange={(e) => setFormMateri(e.target.value)}
+                placeholder="Contoh: Bilangan Bulat & Pecahan"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+          </div>
+
+          <div className="text-xs">
+            <label className="block font-bold text-slate-700 mb-1">
+              Deskripsi Tujuan Pembelajaran <span className="text-rose-600">*</span>
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={formDescription}
+              onChange={(e) => setFormDescription(e.target.value)}
+              placeholder="Tuliskan rumusan kompetensi yang dicapai peserta didik pada TP ini..."
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsFormOpen(false);
+                setEditingTp(null);
+              }}
+              className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50 cursor-pointer"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Simpan TP</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* TP List Table (No Student List, No Scores, No Mastery Columns) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-bold text-slate-700">
+            Menampilkan <span className="text-teal-700">{displayedObjectives.length}</span> Tujuan Pembelajaran —{' '}
+            <span className="text-slate-900">{selectedSubject?.name || '-'}</span> •{' '}
+            <span>Kelas {selectedClassroom?.name || '-'}</span> ({selectedYear} / {selectedSemester})
+          </div>
+          <div className="text-[11px] text-slate-500 font-medium">
+            Total TP pada konteks aktif: <strong>{contextObjectives.length}</strong>
+          </div>
+        </div>
+
+        {displayedObjectives.length === 0 ? (
+          <div className="p-10 text-center space-y-2">
+            <Target className="w-10 h-10 text-slate-300 mx-auto" />
+            <p className="text-sm font-bold text-slate-700">Belum ada Tujuan Pembelajaran (TP)</p>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Belum ditemukan TP untuk mata pelajaran dan kelas ini pada {selectedYear} Semester {selectedSemester}.
+              {writeAuth.allowed && ' Klik tombol "Tambah TP Baru" di kanan atas untuk mulai menyusun daftar TP.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[11px] font-bold">
+                  <th className="py-3 px-4 w-12 text-center">No</th>
+                  <th className="py-3 px-4 w-32">Kode TP</th>
+                  <th className="py-3 px-4">Deskripsi Tujuan Pembelajaran</th>
+                  <th className="py-3 px-4 w-44">Lingkup & Periode</th>
+                  <th className="py-3 px-4 w-36 text-center">Keterhubungan</th>
+                  <th className="py-3 px-4 w-28 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {displayedObjectives.map((tp, idx) => {
+                  const usage = checkLearningObjectiveInUse({
+                    tpId: tp.id,
+                    learningChapters,
+                    summativePlans,
+                    formativeAssessments,
+                    summativeAssessments,
+                    scores
+                  });
                   return (
-                    <label
-                      key={tp.id}
-                      className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-xs cursor-pointer transition ${
-                        checked
-                          ? 'bg-emerald-50 border-emerald-400 text-emerald-950'
-                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleTpSelection(tp.id)}
-                        className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <div className="min-w-0">
-                        <div className="font-bold text-emerald-800">
+                    <tr key={tp.id} className="hover:bg-slate-50/80 transition">
+                      <td className="py-3 px-4 text-center font-semibold text-slate-500">{idx + 1}</td>
+                      <td className="py-3 px-4">
+                        <span className="inline-flex px-2.5 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 font-extrabold">
                           {tp.code}
-                          {tp.materi ? ` • ${tp.materi}` : ''}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        {tp.materi && (
+                          <div className="text-[11px] font-bold text-indigo-700 mb-0.5">Materi: {tp.materi}</div>
+                        )}
+                        <p className="text-slate-800 leading-relaxed">{tp.description}</p>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-semibold text-slate-700">
+                          {tp.classId
+                            ? `Kelas ${classrooms.find((c) => c.id === tp.classId)?.name || tp.classId}`
+                            : `Semua Tingkat ${tp.gradeLevel}`}
                         </div>
-                        <div className="text-[11px] text-slate-600 line-clamp-2">{tp.description}</div>
-                      </div>
-                    </label>
+                        <div className="text-[11px] text-slate-500">
+                          {tp.academicYear || 'Semua TA'} • Sm. {tp.semester}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        {usage.inUse ? (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-semibold"
+                            title={usage.references.join('; ')}
+                          >
+                            Terhubung ({usage.references.length})
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Belum ditautkan</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={!writeAuth.allowed}
+                            onClick={() => openEditForm(tp)}
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-blue-700 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+                            title="Edit TP"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!writeAuth.allowed}
+                            onClick={() => handleRequestDeleteTp(tp)}
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-rose-700 hover:bg-rose-50 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+                            title={usage.inUse ? usage.reason : 'Hapus TP'}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
                   );
                 })}
-              </div>
-            )}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
 
-      {viewMode === 'input' ? (
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-10 text-center">NO</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">NAMA PESERTA DIDIK</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-44">STATUS KETERCAPAIAN TP</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 w-28 text-center">NILAI (0–100)</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">HASIL PENGAMATAN</th>
-                  <th className="px-3 py-3 text-[11px] font-bold text-slate-600 min-w-[180px]">UMPAN BALIK PERBAIKAN</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredStudents.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400 text-xs italic">
-                      Pilih rombel untuk menampilkan daftar siswa.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredStudents.map((std, idx) => (
-                    <tr key={std.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-3 py-3 text-center text-xs font-medium text-slate-400">{idx + 1}</td>
-                      <td className="px-3 py-3">
-                        <div className="font-bold text-slate-700 text-xs">{std.name}</div>
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">{std.nisn || std.nis}</div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <select
-                          disabled={isReadOnly}
-                          value={masteryStatuses[std.id] || ''}
-                          onChange={(e) =>
-                            setMasteryStatuses({
-                              ...masteryStatuses,
-                              [std.id]: e.target.value as FormativeMasteryStatus | ''
-                            })
-                          }
-                          className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:ring-1 focus:ring-emerald-500 outline-none disabled:bg-slate-100"
-                        >
-                          <option value="">-- Status TP --</option>
-                          <option value="Tercapai Optimal">Tercapai Optimal</option>
-                          <option value="Tercapai Baik">Tercapai Baik</option>
-                          <option value="Perlu Penguatan">Perlu Penguatan</option>
-                        </select>
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          disabled={isReadOnly}
-                          placeholder="0-100"
-                          value={diagnosticScores[std.id] ?? ''}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            const parsed =
-                              raw === '' ? undefined : Math.min(100, Math.max(0, Number(raw)));
-                            const nextScores = { ...diagnosticScores, [std.id]: parsed };
-                            setDiagnosticScores(nextScores);
-                            // Auto suggest mastery status based on score if not manually set
-                            if (parsed !== undefined && !masteryStatuses[std.id]) {
-                              const autoStatus: FormativeMasteryStatus =
-                                parsed >= 85 ? 'Tercapai Optimal' : parsed >= 75 ? 'Tercapai Baik' : 'Perlu Penguatan';
-                              setMasteryStatuses({ ...masteryStatuses, [std.id]: autoStatus });
-                            }
-                          }}
-                          className="w-20 px-2.5 py-1.5 text-center text-xs font-black rounded-lg border border-slate-300 focus:border-emerald-500 outline-none disabled:bg-slate-100 text-emerald-800 bg-white"
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <textarea
-                          disabled={isReadOnly}
-                          placeholder="Catat kemajuan atau kendala..."
-                          value={observations[std.id] || ''}
-                          onChange={(e) => setObservations({ ...observations, [std.id]: e.target.value })}
-                          className="w-full p-2 text-xs rounded-lg border border-slate-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none resize-none transition-all h-14 disabled:bg-slate-100"
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <textarea
-                          disabled={isReadOnly}
-                          placeholder="Berikan saran perbaikan..."
-                          value={feedbacks[std.id] || ''}
-                          onChange={(e) => setFeedbacks({ ...feedbacks, [std.id]: e.target.value })}
-                          className="w-full p-2 text-xs rounded-lg border border-slate-200 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 outline-none resize-none transition-all h-14 disabled:bg-slate-100"
-                        />
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[11px] text-slate-500">
-              <Info className="w-4 h-4 text-blue-500 shrink-0" />
-              <span>
-                Data kosong tidak dianggap nol. Baris disimpan jika status TP, skor (0-100), pengamatan, atau umpan balik diisi.
-              </span>
-            </div>
-            <button
-              onClick={handleSaveAll}
-              disabled={isReadOnly || saveSuccess || selectedTpIds.length === 0 || filteredStudents.length === 0}
-              className={`px-6 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shadow-md active:scale-95 ${
-                saveSuccess
-                  ? 'bg-emerald-500 text-white'
-                  : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed'
-              }`}
-            >
-              {saveSuccess ? (
-                <>
-                  <Check className="w-4 h-4" /> Tersimpan
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4" /> Simpan Jurnal Formatif
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* History View */
-        <div className="space-y-4">
-          {historyData.length === 0 ? (
-            <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center space-y-3">
-              <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto">
-                <Clock className="w-8 h-8 text-slate-300" />
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteTp && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
               </div>
-              <h3 className="text-slate-700 font-bold text-sm">Belum Ada Riwayat Formatif</h3>
-              <p className="text-slate-400 text-xs max-w-xs mx-auto">
-                Mulailah mencatat asesmen formatif untuk melihat perkembangan belajar siswa di kelas ini.
-              </p>
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-900">Hapus Tujuan Pembelajaran?</h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Anda akan menghapus <strong>{confirmDeleteTp.code}</strong>: &ldquo;{confirmDeleteTp.description}
+                  &rdquo;. Tindakan ini hanya diizinkan karena TP belum terhubung ke BAB, Sumatif, maupun nilai rapor.
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {historyData.map((item) => {
-                const std = students.find((s) => s.id === item.studentId);
-                const linkedTps = getFormativeTpIds(item)
-                  .map((id) => learningObjectives.find((t) => t.id === id))
-                  .filter(Boolean) as LearningObjective[];
-
-                return (
-                  <div
-                    key={item.id}
-                    className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                            <Calendar className="w-3.5 h-3.5" />
-                          </div>
-                          <span className="text-[10px] font-bold text-slate-500 uppercase">{item.date}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          {item.masteryStatus && (
-                            <span
-                              className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
-                                item.masteryStatus === 'Tercapai Optimal'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : item.masteryStatus === 'Tercapai Baik'
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : 'bg-amber-50 text-amber-700 border-amber-200'
-                              }`}
-                            >
-                              {item.masteryStatus}
-                            </span>
-                          )}
-                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[9px] font-bold uppercase tracking-wider border border-slate-200">
-                            {item.technique}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="mb-3">
-                        <div className="flex items-center justify-between">
-                          <div className="text-[11px] font-bold text-slate-800">{std?.name || 'Siswa'}</div>
-                          {typeof item.score === 'number' && (
-                            <span className="text-[11px] font-mono font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                              Nilai: {item.score}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                          <Target className="w-3 h-3 text-blue-500 shrink-0" />
-                          {linkedTps.length > 0 ? (
-                            linkedTps.map((tp) => (
-                              <span
-                                key={tp.id}
-                                className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-bold"
-                                title={tp.description}
-                              >
-                                {tp.code}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-[10px] text-slate-400">TP: {item.tpId}</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="space-y-2 pt-3 border-t border-slate-100">
-                        {item.observation && (
-                          <div className="space-y-1">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                              <UserCheck className="w-3 h-3" /> Pengamatan
-                            </div>
-                            <p className="text-xs text-slate-700 leading-relaxed italic">"{item.observation}"</p>
-                          </div>
-                        )}
-                        {item.feedback && (
-                          <div className="space-y-1">
-                            <div className="text-[9px] font-bold text-emerald-500 uppercase flex items-center gap-1">
-                              <MessageSquare className="w-3 h-3" /> Umpan Balik
-                            </div>
-                            <p className="text-xs text-slate-600 leading-relaxed font-medium">{item.feedback}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {!isReadOnly && (
-                      <div className="flex items-center justify-end gap-1 pt-3 mt-3 border-t border-slate-100">
-                        <button
-                          onClick={() => setEditingAssessment(item)}
-                          className="px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-blue-100 transition"
-                        >
-                          <Edit3 className="w-3 h-3" /> Edit
-                        </button>
-                        <button
-                          onClick={() => onDeleteAssessment(item.id)}
-                          className="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-rose-100 transition"
-                        >
-                          <Trash2 className="w-3 h-3" /> Hapus
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Edit Formative Modal */}
-      {editingAssessment && (
-        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200 animate-in zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-sm text-slate-900">Edit Asesmen Formatif</h3>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
-                onClick={() => setEditingAssessment(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Status Ketercapaian TP</label>
-                <select
-                  value={editingAssessment.masteryStatus || ''}
-                  onChange={(e) =>
-                    setEditingAssessment({
-                      ...editingAssessment,
-                      masteryStatus: (e.target.value as FormativeMasteryStatus) || undefined
-                    })
-                  }
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold outline-none"
-                >
-                  <option value="">-- Pilih Status --</option>
-                  <option value="Tercapai Optimal">Tercapai Optimal</option>
-                  <option value="Tercapai Baik">Tercapai Baik</option>
-                  <option value="Perlu Penguatan">Perlu Penguatan</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Skor Angka (0–100)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={editingAssessment.score ?? ''}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    const val = raw === '' ? undefined : Math.min(100, Math.max(0, Number(raw)));
-                    setEditingAssessment({ ...editingAssessment, score: val });
-                  }}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Hasil Pengamatan</label>
-                <textarea
-                  rows={3}
-                  value={editingAssessment.observation || ''}
-                  onChange={(e) =>
-                    setEditingAssessment({ ...editingAssessment, observation: e.target.value })
-                  }
-                  className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Umpan Balik</label>
-                <textarea
-                  rows={3}
-                  value={editingAssessment.feedback || ''}
-                  onChange={(e) =>
-                    setEditingAssessment({ ...editingAssessment, feedback: e.target.value })
-                  }
-                  className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 text-xs">
-              <button
-                onClick={() => setEditingAssessment(null)}
-                className="px-4 py-2 rounded-xl border border-slate-300 font-semibold"
+                type="button"
+                onClick={() => setConfirmDeleteTp(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-50 cursor-pointer"
               >
                 Batal
               </button>
               <button
-                onClick={handleUpdateEditingAssessment}
-                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold"
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
               >
-                Simpan Perubahan
+                Ya, Hapus TP
               </button>
             </div>
           </div>

@@ -42,9 +42,12 @@ import {
   KokurikulerScore,
   KokurikulerDescription,
   AssessmentPolicyConfig,
-  LearningChapter
+  LearningChapter,
+  SummativeAssessmentPlan,
+  AuthSessionContext,
+  SaveOperationResult
 } from './types/erapor';
-import { Calendar } from 'lucide-react';
+import { Calendar, AlertTriangle, CheckCircle2, X } from 'lucide-react';
 import {
   getAvailableAcademicYears,
   getCurrentSystemAcademicYear,
@@ -66,6 +69,21 @@ import {
   ensureElectiveCodingSubject,
   isCodingSubject
 } from './utils/electiveSubjectHelper';
+import { resolveTeacherForUser } from './utils/teacherAssignmentHelper';
+import {
+  authorizeSubjectAssessmentWrite,
+  authorizeSensitiveAdminAction,
+  checkLegacyScoreProtection,
+  checkLearningObjectiveInUse,
+  checkLearningChapterInUse,
+  checkSummativePlanInUse
+} from './utils/authorizationGuard';
+import {
+  buildDeterministicScoreId,
+  computeStudentReportScore,
+  getEffectiveSasScore,
+  resolveSchoolWeights
+} from './utils/assessmentCalculation';
 import { Header } from './components/layout/Header';
 import { Sidebar, MenuId } from './components/layout/Sidebar';
 import {
@@ -123,13 +141,18 @@ import { ManajemenTahunAjaranView } from './views/ManajemenTahunAjaranView';
 import { BukuIndukView } from './views/BukuIndukView';
 import { TranskripNilaiView } from './views/TranskripNilaiView';
 import { LoginView } from './views/LoginView';
-import { getSavedSessionUserId, logoutUser } from './services/authService';
+import {
+  getSavedSessionUserId,
+  getSavedAuthSessionContext,
+  logoutUser
+} from './services/authService';
 import { SecurityAccessDenied } from './components/SecurityAccessDenied';
 
 // Kurikulum Merdeka 2025 Views
 import { KKTPConfigView } from './views/KKTPConfigView';
 import { AsesmenFormatifView } from './views/AsesmenFormatifView';
 import { AsesmenSumatifView } from './views/AsesmenSumatifView';
+import { PengolahanNilaiTabelView } from './views/PengolahanNilaiTabelView';
 import { PengolahanNilaiAkhirView } from './views/PengolahanNilaiAkhirView';
 
 // Modul Penilaian Kokurikuler (e-Rapor SMP Kemendikdasmen 2025.2 / BSKAP 058/H/KR/2025)
@@ -177,6 +200,19 @@ export default function App() {
     return null;
   });
 
+  const [authContext, setAuthContext] = useState<AuthSessionContext | null>(() =>
+    getSavedAuthSessionContext()
+  );
+  const [lastSaveStatus, setLastSaveStatus] = useState<SaveOperationResult | null>(null);
+  const [appAlertBanner, setAppAlertBanner] = useState<{
+    type: 'error' | 'warning' | 'success';
+    text: string;
+  } | null>(null);
+
+  const pushAlert = (type: 'error' | 'warning' | 'success', text: string) => {
+    setAppAlertBanner({ type, text });
+  };
+
   // Dual duty mode (Wali Kelas vs Guru Mata Pelajaran)
   const [dutyMode, setDutyMode] = useState<DutyMode>(() => {
     try {
@@ -188,6 +224,7 @@ export default function App() {
 
   const handleLoginSuccess = (user: User, semesterChoice?: string) => {
     setCurrentUser(user);
+    setAuthContext(getSavedAuthSessionContext());
     setIsAuthenticated(true);
     const newDuty: DutyMode = user.role === 'walikelas' ? 'walikelas' : 'guru';
     setDutyMode(newDuty);
@@ -219,6 +256,9 @@ export default function App() {
     await logoutUser(currentUser);
     setIsAuthenticated(false);
     setCurrentUser(null);
+    setAuthContext(null);
+    setLastSaveStatus(null);
+    setAppAlertBanner(null);
     setActiveMenu('dashboard');
   };
 
@@ -245,17 +285,9 @@ export default function App() {
     } catch {}
   };
 
-  // Find associated teacher profile for current user
+  // Find associated teacher profile for current user using standardized helper (zero hardcoded names)
   const currentTeacher = React.useMemo(() => {
-    if (!currentUser) return undefined;
-    return db.teachers.find(
-      (t) =>
-        (currentUser.teacherId && t.id === currentUser.teacherId) ||
-        (currentUser.nip && t.nip === currentUser.nip) ||
-        (t.name.toLowerCase().includes('fauzi') && currentUser.name.toLowerCase().includes('fauzi')) ||
-        (t.name.toLowerCase().includes('nikmatul') && currentUser.name.toLowerCase().includes('nikmatul')) ||
-        t.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim()
-    );
+    return resolveTeacherForUser(currentUser, db.teachers);
   }, [db.teachers, currentUser]);
 
   const hasHomeroomDuty = Boolean(currentUser?.classId || currentTeacher?.isHomeroom);
@@ -332,6 +364,8 @@ export default function App() {
             if (!item || !item.id) return false;
             if (isEntityDeleted(key as string, item.id)) return false;
             if (key === 'learningObjectives' && isEntityDeleted('assessments', item.id)) return false;
+            if (key === 'learningChapters' && isEntityDeleted('summative_chapters', item.id)) return false;
+            if (key === 'summativePlans' && isEntityDeleted('summative_plans', item.id)) return false;
             return true;
           });
 
@@ -376,6 +410,8 @@ export default function App() {
         // Standard Collections
         mergeList('scores', payload.scores);
         mergeList('notifications', payload.notifications);
+        mergeList('learningChapters', payload.learningChapters);
+        mergeList('summativePlans', payload.summativePlans);
         mergeList('formativeAssessments', payload.formativeAssessments);
         mergeList('summativeAssessments', payload.summativeAssessments);
         mergeList('kktpConfigs', payload.kktpConfigs);
@@ -547,6 +583,26 @@ export default function App() {
                 ),
                 formativeAssessments: remoteData.formativeAssessments !== undefined ? remoteData.formativeAssessments : prev.formativeAssessments,
                 summativeAssessments: remoteData.summativeAssessments !== undefined ? remoteData.summativeAssessments : prev.summativeAssessments,
+                learningChapters: (remoteData.learningChapters !== undefined
+                  ? remoteData.learningChapters
+                  : (prev.learningChapters || [])
+                ).filter(
+                  (ch) =>
+                    ch &&
+                    ch.id &&
+                    !isEntityDeleted('summative_chapters', ch.id) &&
+                    !isEntityDeleted('learningChapters', ch.id)
+                ),
+                summativePlans: (remoteData.summativePlans !== undefined
+                  ? remoteData.summativePlans
+                  : (prev.summativePlans || [])
+                ).filter(
+                  (pl) =>
+                    pl &&
+                    pl.id &&
+                    !isEntityDeleted('summative_plans', pl.id) &&
+                    !isEntityDeleted('summativePlans', pl.id)
+                ),
                 kktpConfigs: remoteData.kktpConfigs !== undefined ? remoteData.kktpConfigs : prev.kktpConfigs,
                 finalScoreConfigs: remoteData.finalScoreConfigs !== undefined ? remoteData.finalScoreConfigs : prev.finalScoreConfigs,
                 extracurriculars: remoteData.extracurriculars !== undefined ? remoteData.extracurriculars : prev.extracurriculars,
@@ -881,23 +937,115 @@ export default function App() {
   };
 
   // Handlers for Learning Objectives (TP)
-  const handleSaveObjective = (obj: LearningObjective) => {
+  const handleSaveObjective = (obj: LearningObjective): { success: boolean; error?: string } => {
+    const authRes = authorizeSubjectAssessmentWrite({
+      user: effectiveUser,
+      subjectId: obj.subjectId,
+      classId: obj.classId,
+      academicYear: obj.academicYear || db.schoolProfile.activeAcademicYear,
+      semester: obj.semester,
+      teachers: db.teachers,
+      teachingAssignments: db.teachingAssignments,
+      assessmentPolicy: db.assessmentPolicy,
+      authContext
+    });
+    if (!authRes.allowed) {
+      const msg = authRes.reason || 'Akses ditolak untuk menyimpan Tujuan Pembelajaran.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
     removeDeletedEntityId('assessments', obj.id);
     removeDeletedEntityId('learningObjectives', obj.id);
-    updateDbAndSave((prev) => {
-      const idx = prev.learningObjectives.findIndex((o) => o.id === obj.id);
-      let newObjectives = [...prev.learningObjectives];
-      if (idx >= 0) {
-        newObjectives[idx] = obj;
+    const enrichedObj: LearningObjective = {
+      ...obj,
+      teacherId: authRes.resolvedTeacherId || obj.teacherId,
+      updatedAt: obj.updatedAt || new Date().toISOString(),
+      updatedBy: currentUser?.name || obj.updatedBy
+    };
+
+    updateDbAndSave(
+      (prev) => {
+        const idx = prev.learningObjectives.findIndex((o) => o.id === enrichedObj.id);
+        const newObjectives = [...prev.learningObjectives];
+        if (idx >= 0) {
+          newObjectives[idx] = enrichedObj;
+        } else {
+          newObjectives.push(enrichedObj);
+        }
+        return { ...prev, learningObjectives: newObjectives };
+      },
+      true
+    );
+
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN TP ${obj.code} ke server Firestore...`
+    });
+    surgicalSync('assessments', enrichedObj.id, enrichedObj).then((syncRes) => {
+      if (syncRes.success) {
+        setLastSaveStatus({
+          success: true,
+          savedToServer: true,
+          status: 'SAVED_SERVER',
+          count: 1,
+          message: `TP ${enrichedObj.code} BERHASIL TERSIMPAN DI SERVER.`,
+          timestamp: new Date().toISOString()
+        });
       } else {
-        newObjectives.push(obj);
+        const status = syncRes.quotaExceeded ? 'LOCAL_ONLY_QUOTA' : 'FAILED_SERVER';
+        setLastSaveStatus({
+          success: false,
+          savedToServer: false,
+          status,
+          quotaExceeded: syncRes.quotaExceeded,
+          message: syncRes.error || 'Gagal menyimpan TP ke server Firestore.',
+          error: syncRes.error
+        });
       }
-      return { ...prev, learningObjectives: newObjectives };
-    }, false, { collection: 'assessments', id: obj.id, data: obj });
+    });
+
     logActivity(currentUser, 'Simpan TP', `Menyimpan Tujuan Pembelajaran: ${obj.code}`);
+    return { success: true };
   };
 
-  const handleDeleteObjective = async (objId: string) => {
+  const handleDeleteObjective = async (objId: string): Promise<{ success: boolean; error?: string }> => {
+    const targetTp = db.learningObjectives.find((o) => o.id === objId);
+    if (targetTp) {
+      const authRes = authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: targetTp.subjectId,
+        classId: targetTp.classId,
+        academicYear: targetTp.academicYear || db.schoolProfile.activeAcademicYear,
+        semester: targetTp.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      });
+      if (!authRes.allowed) {
+        const msg = authRes.reason || 'Akses ditolak untuk menghapus TP.';
+        pushAlert('error', msg);
+        return { success: false, error: msg };
+      }
+    }
+
+    const usage = checkLearningObjectiveInUse({
+      tpId: objId,
+      learningChapters: db.learningChapters,
+      summativePlans: db.summativePlans,
+      formativeAssessments: db.formativeAssessments,
+      summativeAssessments: db.summativeAssessments,
+      scores: db.scores
+    });
+    if (usage.inUse) {
+      const msg = usage.reason || 'TP sedang dipakai oleh data asesmen atau nilai rapor.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
     addDeletedEntityId('assessments', objId);
     addDeletedEntityId('learningObjectives', objId);
     updateDbAndSave(
@@ -907,8 +1055,15 @@ export default function App() {
       }),
       true
     );
-    await deleteDocFromFirestore('assessments', objId);
+    const deleted = await deleteDocFromFirestore('assessments', objId);
     logActivity(currentUser, 'Hapus TP', `Menghapus Tujuan Pembelajaran ID: ${objId}`);
+    if (!deleted) {
+      return {
+        success: false,
+        error: 'TP dihapus secara lokal, tetapi gagal menghapus dokumen di server Firestore.'
+      };
+    }
+    return { success: true };
   };
 
   // Handlers for Extracurriculars
@@ -1016,24 +1171,90 @@ export default function App() {
     logActivity(currentUser, 'Simpan Absensi', `Menyimpan rekap absensi untuk ${records.length} siswa.`);
   };
 
-  // Handlers for Scores (Batch save & Real-time Cloud Sync)
+  // Handlers for Scores (RBAC guarded, Legacy protected, Conflict checked & Honest server status)
   const handleSaveScores = (newScores: AssessmentScore[], notification?: AppNotification) => {
-    const canBypassLock = currentUser?.role === 'admin';
-    const allowedScores = canBypassLock
-      ? newScores
-      : newScores.filter(
-          (sc) => !isPeriodInputLocked(db.assessmentPolicy, sc.academicYear, sc.semester)
-        );
-    if (allowedScores.length === 0 && newScores.length > 0) {
-      return;
-    }
-
     const scoreKey = (s: AssessmentScore) =>
       `${s.studentId}-${s.subjectId}-${(s.academicYear || '').replace(/\//g, '_')}-${s.semester}`;
 
+    const existingScoreMap = new Map(db.scores.map((s) => [scoreKey(s), s]));
+    const baseUpdatedAtById: Record<string, string> = {};
+
+    const authorizedScores: AssessmentScore[] = [];
+    let rejectedAuthCount = 0;
+    let protectedLegacyCount = 0;
+    let lastRejectionMsg = '';
+
+    newScores.forEach((incoming) => {
+      const authRes = authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: incoming.subjectId,
+        classId: incoming.classId,
+        academicYear: incoming.academicYear,
+        semester: incoming.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      });
+      if (!authRes.allowed) {
+        rejectedAuthCount++;
+        lastRejectionMsg = authRes.reason || 'Akses simpan nilai ditolak.';
+        return;
+      }
+
+      const key = scoreKey(incoming);
+      const existing = existingScoreMap.get(key);
+      const legacyCheck = checkLegacyScoreProtection({
+        score: existing || incoming,
+        academicYears: db.academicYears,
+        assessmentPolicy: db.assessmentPolicy,
+        user: currentUser
+      });
+
+      if (legacyCheck.isProtected && existing && currentUser?.role !== 'admin') {
+        protectedLegacyCount++;
+        lastRejectionMsg = legacyCheck.reason || 'Nilai arsip/finalisasi tidak dapat diubah.';
+        return;
+      }
+
+      // Deterministic ID: reuse existing doc ID if present, otherwise deterministic composite ID
+      const stableId =
+        existing?.id ||
+        buildDeterministicScoreId(
+          incoming.studentId,
+          incoming.subjectId,
+          incoming.academicYear,
+          incoming.semester
+        );
+
+      if (existing?.updatedAt) {
+        baseUpdatedAtById[stableId] = existing.updatedAt;
+      }
+
+      authorizedScores.push({
+        ...incoming,
+        id: stableId,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser?.name || incoming.updatedBy,
+        updatedById: currentUser?.id || incoming.updatedById
+      });
+    });
+
+    if (rejectedAuthCount > 0 || protectedLegacyCount > 0) {
+      pushAlert(
+        'warning',
+        lastRejectionMsg ||
+          `Sebagian data (${rejectedAuthCount + protectedLegacyCount}) dilewati karena batas hak akses atau perlindungan nilai terfinalisasi.`
+      );
+    }
+
+    if (authorizedScores.length === 0) {
+      return;
+    }
+
     updateDbAndSave((prev) => {
       const scoreMap = new Map(prev.scores.map((s) => [scoreKey(s), s]));
-      allowedScores.forEach((sc) => {
+      authorizedScores.forEach((sc) => {
         scoreMap.set(scoreKey(sc), sc);
       });
 
@@ -1049,12 +1270,34 @@ export default function App() {
         scores: Array.from(scoreMap.values()),
         notifications: updatedNotifications
       };
-    }, true); // skip whole-database auto sync! We send targeted scores below!
+    }, true); // skip whole-database auto sync; targeted batch write follows
 
-    // Save directly to Cloud Firestore in real time
-    saveScoresToFirestoreDirect(allowedScores, notification).catch(() => {});
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN ${authorizedScores.length} data nilai ke server Firestore...`
+    });
 
-    logActivity(currentUser, 'Simpan Nilai Siswa', `Menyimpan dan mengkalkulasi ${allowedScores.length} data nilai.`);
+    saveScoresToFirestoreDirect(authorizedScores, notification, {
+      baseUpdatedAtById,
+      currentUserId: currentUser?.id,
+      checkConflicts: true
+    }).then((res) => {
+      setLastSaveStatus(res);
+      if (!res.success) {
+        pushAlert(
+          res.conflictDetected || res.status === 'FAILED_SERVER' ? 'error' : 'warning',
+          res.message || res.error || 'Gagal menyimpan data nilai ke server Firestore.'
+        );
+      }
+    });
+
+    logActivity(
+      currentUser,
+      'Simpan Nilai Siswa',
+      `Menyimpan ${authorizedScores.length} data nilai (${rejectedAuthCount + protectedLegacyCount} dilindungi/dilewati).`
+    );
   };
 
   const handleMarkNotificationRead = (notifId: string) => {
@@ -1087,13 +1330,27 @@ export default function App() {
 
   // Handler for Assessment Policy & Period Input Lock (Admin)
   const handleSaveAssessmentPolicy = (policy: AssessmentPolicyConfig) => {
+    const adminAuth = authorizeSensitiveAdminAction({
+      user: currentUser,
+      authContext,
+      actionLabel: 'perubahan kebijakan penilaian & penguncian periode'
+    });
+    if (!adminAuth.allowed) {
+      pushAlert('error', adminAuth.reason || 'Hanya Administrator terverifikasi yang dapat mengubah kebijakan penilaian.');
+      return;
+    }
+
     const normalized = normalizeAssessmentPolicy({
       ...policy,
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser?.name || policy.updatedBy || 'Administrator'
     });
     updateDbAndSave((prev) => ({ ...prev, assessmentPolicy: normalized }), true);
-    saveAssessmentPolicyDirect(normalized).catch(() => {});
+    saveAssessmentPolicyDirect(normalized).then((res) => {
+      if (!res.success || res.quotaExceeded) {
+        pushAlert('warning', res.error || 'Kebijakan disimpan lokal, namun gagal sinkron ke server Firestore.');
+      }
+    });
     logActivity(
       currentUser,
       'Simpan Kebijakan Penilaian',
@@ -1190,9 +1447,19 @@ export default function App() {
 
   // Handlers for Users
   const handleSaveUser = (user: User) => {
+    const adminAuth = authorizeSensitiveAdminAction({
+      user: currentUser,
+      authContext,
+      actionLabel: 'pengelolaan akun pengguna'
+    });
+    if (!adminAuth.allowed) {
+      pushAlert('error', adminAuth.reason || 'Akses ditolak untuk mengubah akun pengguna.');
+      return;
+    }
+
     updateDbAndSave((prev) => {
       const idx = prev.users.findIndex((u) => u.id === user.id);
-      let newUsers = [...prev.users];
+      const newUsers = [...prev.users];
       if (idx >= 0) {
         newUsers[idx] = user;
       } else {
@@ -1281,6 +1548,16 @@ export default function App() {
   };
 
   const handleToggleUserStatus = (userId: string, newStatus: 'active' | 'inactive') => {
+    const adminAuth = authorizeSensitiveAdminAction({
+      user: currentUser,
+      authContext,
+      actionLabel: 'ubah status aktif akun'
+    });
+    if (!adminAuth.allowed) {
+      pushAlert('error', adminAuth.reason || 'Akses ditolak.');
+      return;
+    }
+
     const targetUser = db.users.find(u => u.id === userId);
     const updatedUser = targetUser ? { ...targetUser, status: newStatus } : null;
     
@@ -1300,6 +1577,16 @@ export default function App() {
   };
 
   const handleResetUserPassword = (userId: string, newPass: string) => {
+    const adminAuth = authorizeSensitiveAdminAction({
+      user: currentUser,
+      authContext,
+      actionLabel: 'reset kata sandi pengguna'
+    });
+    if (!adminAuth.allowed) {
+      pushAlert('error', adminAuth.reason || 'Akses ditolak.');
+      return;
+    }
+
     const targetUser = db.users.find(u => u.id === userId);
     const updatedUser = targetUser ? { ...targetUser, password: newPass } : null;
 
@@ -1334,9 +1621,10 @@ export default function App() {
       const parsed = JSON.parse(jsonContent);
       setDb(parsed);
       saveDatabase(parsed);
+      pushAlert('success', 'Database berhasil dipulihkan dari berkas cadangan JSON.');
       logActivity(currentUser, 'Restore Database', 'Memulihkan database dari berkas cadangan JSON.');
     } catch (e: any) {
-      alert(`Gagal memulihkan database: ${e.message}`);
+      pushAlert('error', `Gagal memulihkan database: ${e.message}`);
     }
   };
 
@@ -1351,62 +1639,326 @@ export default function App() {
 
   const handlePurgeMasterData = async () => {
     try {
-      // 1. Clear locally first for instant feedback
       const purged = partialPurgeMasterData(db);
       setDb(purged);
       saveDatabase(purged);
-      
-      // 2. Clear cloud collections (Hard Wipe)
       await wipeFirestoreMasterCollections();
-      
-      // 3. Sync the remaining configuration (School Profile, Classrooms, etc.) back to cloud
       await syncAllToFirestore(purged, currentUser || undefined);
-      
       logActivity(currentUser, 'Pembersihan Data Master', 'Mengosongkan seluruh data siswa, guru, dan akun guru untuk mulai baru.');
     } catch (e: any) {
       console.error('Purge error:', e);
-      alert(`Gagal membersihkan data master: ${e.message}`);
+      pushAlert('error', `Gagal membersihkan data master: ${e.message}`);
     }
   };
 
-  // Kurikulum Merdeka 2025 Handlers
-  const handleSaveLearningChapter = (ch: LearningChapter) => {
+  // Kurikulum Merdeka 2025 Handlers (RBAC & Legacy Protected)
+  const handleSaveLearningChapter = (ch: LearningChapter): { success: boolean; error?: string } => {
+    const authRes = authorizeSubjectAssessmentWrite({
+      user: effectiveUser,
+      subjectId: ch.subjectId,
+      classId: ch.classId,
+      academicYear: ch.academicYear || db.schoolProfile.activeAcademicYear,
+      semester: ch.semester,
+      teachers: db.teachers,
+      teachingAssignments: db.teachingAssignments,
+      assessmentPolicy: db.assessmentPolicy,
+      authContext
+    });
+    if (!authRes.allowed) {
+      const msg = authRes.reason || 'Akses ditolak untuk menyimpan BAB Materi.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
     removeDeletedEntityId('summative_chapters', ch.id);
+    const enrichedChapter: LearningChapter = {
+      ...ch,
+      teacherId: authRes.resolvedTeacherId || ch.teacherId,
+      updatedAt: new Date().toISOString()
+    };
+
     updateDbAndSave(
       (prev) => {
-        const list = (prev.learningChapters || []).filter((item) => item.id !== ch.id);
-        return { ...prev, learningChapters: [...list, ch] };
+        const list = (prev.learningChapters || []).filter((item) => item.id !== enrichedChapter.id);
+        return { ...prev, learningChapters: [...list, enrichedChapter] };
       },
-      false,
-      { collection: 'summative_chapters', id: ch.id, data: ch }
+      true
     );
+
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN ${enrichedChapter.code} ke server Firestore...`
+    });
+    surgicalSync('summative_chapters', enrichedChapter.id, enrichedChapter).then((res) => {
+      if (res.success) {
+        setLastSaveStatus({
+          success: true,
+          savedToServer: true,
+          status: 'SAVED_SERVER',
+          count: 1,
+          message: `${enrichedChapter.code} BERHASIL TERSIMPAN DI SERVER.`,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        setLastSaveStatus({
+          success: false,
+          savedToServer: false,
+          status: res.quotaExceeded ? 'LOCAL_ONLY_QUOTA' : 'FAILED_SERVER',
+          quotaExceeded: res.quotaExceeded,
+          message: res.error || 'Gagal menyimpan BAB Materi ke server.',
+          error: res.error
+        });
+      }
+    });
+
+    logActivity(currentUser, 'Simpan BAB Materi', `Menyimpan ${enrichedChapter.code}: ${enrichedChapter.title}`);
+    return { success: true };
   };
 
-  const handleDeleteLearningChapter = async (chapterId: string) => {
+  const handleDeleteLearningChapter = async (
+    chapterId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const existing = (db.learningChapters || []).find((ch) => ch.id === chapterId);
+    if (existing) {
+      const authRes = authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: existing.subjectId,
+        classId: existing.classId,
+        academicYear: existing.academicYear,
+        semester: existing.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      });
+      if (!authRes.allowed) {
+        const msg = authRes.reason || 'Akses ditolak untuk menghapus BAB Materi.';
+        pushAlert('error', msg);
+        return { success: false, error: msg };
+      }
+    }
+
+    const usage = checkLearningChapterInUse({
+      chapterId,
+      summativePlans: db.summativePlans,
+      summativeAssessments: db.summativeAssessments,
+      scores: db.scores
+    });
+    if (usage.inUse) {
+      const msg = usage.reason || 'BAB masih digunakan pada rencana sumatif atau nilai siswa.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
     addDeletedEntityId('summative_chapters', chapterId);
-    updateDbAndSave((prev) => ({
-      ...prev,
-      learningChapters: (prev.learningChapters || []).filter((ch) => ch.id !== chapterId)
-    }), true);
-    await deleteDocFromFirestore('summative_chapters', chapterId);
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        learningChapters: (prev.learningChapters || []).filter((ch) => ch.id !== chapterId)
+      }),
+      true
+    );
+    const deleted = await deleteDocFromFirestore('summative_chapters', chapterId);
+    logActivity(currentUser, 'Hapus BAB Materi', `Menghapus BAB Materi ID: ${chapterId}`);
+    if (!deleted) {
+      return {
+        success: false,
+        error: 'BAB dihapus secara lokal, tetapi gagal menghapus dari server Firestore.'
+      };
+    }
+    return { success: true };
+  };
+
+  const handleSaveSummativePlan = (
+    plan: SummativeAssessmentPlan
+  ): { success: boolean; error?: string } => {
+    const authRes = authorizeSubjectAssessmentWrite({
+      user: effectiveUser,
+      subjectId: plan.subjectId,
+      classId: plan.classId,
+      academicYear: plan.academicYear || db.schoolProfile.activeAcademicYear,
+      semester: plan.semester,
+      teachers: db.teachers,
+      teachingAssignments: db.teachingAssignments,
+      assessmentPolicy: db.assessmentPolicy,
+      authContext
+    });
+    if (!authRes.allowed) {
+      const msg = authRes.reason || 'Akses ditolak untuk menyimpan rencana asesmen sumatif.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
+    removeDeletedEntityId('summative_plans', plan.id);
+    const enrichedPlan: SummativeAssessmentPlan = {
+      ...plan,
+      teacherId: authRes.resolvedTeacherId || plan.teacherId,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.name || plan.updatedBy
+    };
+
+    updateDbAndSave(
+      (prev) => {
+        const list = (prev.summativePlans || []).filter((item) => item.id !== enrichedPlan.id);
+        return { ...prev, summativePlans: [...list, enrichedPlan] };
+      },
+      true
+    );
+
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN ${enrichedPlan.title} ke server Firestore...`
+    });
+    surgicalSync('summative_plans', enrichedPlan.id, enrichedPlan).then((res) => {
+      if (res.success) {
+        setLastSaveStatus({
+          success: true,
+          savedToServer: true,
+          status: 'SAVED_SERVER',
+          count: 1,
+          message: `Rencana "${enrichedPlan.title}" BERHASIL TERSIMPAN DI SERVER.`,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        setLastSaveStatus({
+          success: false,
+          savedToServer: false,
+          status: res.quotaExceeded ? 'LOCAL_ONLY_QUOTA' : 'FAILED_SERVER',
+          quotaExceeded: res.quotaExceeded,
+          message: res.error || 'Gagal menyimpan rencana asesmen sumatif ke server.',
+          error: res.error
+        });
+      }
+    });
+
+    logActivity(currentUser, 'Simpan Rencana Sumatif', `Menyimpan ${enrichedPlan.title} (${enrichedPlan.tpIds.length} TP).`);
+    return { success: true };
+  };
+
+  const handleDeleteSummativePlan = async (
+    planId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const existing = (db.summativePlans || []).find((pl) => pl.id === planId);
+    if (existing) {
+      const authRes = authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: existing.subjectId,
+        classId: existing.classId,
+        academicYear: existing.academicYear,
+        semester: existing.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      });
+      if (!authRes.allowed) {
+        const msg = authRes.reason || 'Akses ditolak untuk menghapus rencana asesmen sumatif.';
+        pushAlert('error', msg);
+        return { success: false, error: msg };
+      }
+    }
+
+    const usage = checkSummativePlanInUse({
+      planId,
+      summativeAssessments: db.summativeAssessments
+    });
+    if (usage.inUse) {
+      const msg = usage.reason || 'Rencana asesmen sumatif sudah memiliki nilai siswa dan tidak dapat dihapus.';
+      pushAlert('error', msg);
+      return { success: false, error: msg };
+    }
+
+    addDeletedEntityId('summative_plans', planId);
+    updateDbAndSave(
+      (prev) => ({
+        ...prev,
+        summativePlans: (prev.summativePlans || []).filter((pl) => pl.id !== planId)
+      }),
+      true
+    );
+    const deleted = await deleteDocFromFirestore('summative_plans', planId);
+    logActivity(currentUser, 'Hapus Rencana Sumatif', `Menghapus rencana asesmen sumatif ID: ${planId}`);
+    if (!deleted) {
+      return {
+        success: false,
+        error: 'Rencana sumatif dihapus secara lokal, tetapi gagal menghapus dari server Firestore.'
+      };
+    }
+    return { success: true };
   };
 
   const handleSaveFormativesBatch = (items: FormativeAssessment[]) => {
+    const allowedItems = items.filter((item) =>
+      authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: item.subjectId,
+        classId: item.classId,
+        academicYear: item.academicYear,
+        semester: item.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      }).allowed
+    );
+    if (allowedItems.length === 0) return;
+
     updateDbAndSave((prev) => {
       const map = new Map((prev.formativeAssessments || []).map((a) => [a.id, a]));
-      items.forEach((item) => map.set(item.id, item));
+      allowedItems.forEach((item) => map.set(item.id, item));
       return { ...prev, formativeAssessments: Array.from(map.values()) };
     }, true);
-    saveBatchToFirestoreDirect('formative_assessments', items).catch(() => {});
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN ${allowedItems.length} data formatif ke server...`
+    });
+    saveBatchToFirestoreDirect('formative_assessments', allowedItems).then((res) => {
+      setLastSaveStatus(res);
+      if (!res.success) {
+        pushAlert('warning', res.message || 'Gagal menyinkronkan batch asesmen formatif ke server.');
+      }
+    });
   };
 
   const handleSaveSummativesBatch = (items: SummativeAssessment[]) => {
+    const allowedItems = items.filter((item) =>
+      authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: item.subjectId,
+        classId: item.classId,
+        academicYear: item.academicYear,
+        semester: item.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      }).allowed
+    );
+    if (allowedItems.length === 0) return;
+
     updateDbAndSave((prev) => {
       const map = new Map((prev.summativeAssessments || []).map((a) => [a.id, a]));
-      items.forEach((item) => map.set(item.id, item));
+      allowedItems.forEach((item) => map.set(item.id, item));
       return { ...prev, summativeAssessments: Array.from(map.values()) };
     }, true);
-    saveBatchToFirestoreDirect('summative_assessments', items).catch(() => {});
+    setLastSaveStatus({
+      success: false,
+      savedToServer: false,
+      status: 'SAVING',
+      message: `MENYIMPAN ${allowedItems.length} data sumatif ke server...`
+    });
+    saveBatchToFirestoreDirect('summative_assessments', allowedItems).then((res) => {
+      setLastSaveStatus(res);
+      if (!res.success) {
+        pushAlert('warning', res.message || 'Gagal menyinkronkan batch asesmen sumatif ke server.');
+      }
+    });
   };
 
   const handleConfirmExcelImport = (payload: {
@@ -1418,6 +1970,49 @@ export default function App() {
     handleSaveScores(scoresToSave);
     if (summativesToSave.length > 0) {
       handleSaveSummativesBatch(summativesToSave);
+    }
+  };
+
+  const handleSaveSpreadsheetBatch = (payload: {
+    scoresToSave: AssessmentScore[];
+    summativesToSave: SummativeAssessment[];
+    notification?: AppNotification;
+  }) => {
+    const { scoresToSave, summativesToSave, notification } = payload;
+    if (summativesToSave.length > 0 && scoresToSave.length === 0) {
+      handleSaveSummativesBatch(summativesToSave);
+      return;
+    }
+    if (summativesToSave.length > 0) {
+      // Save summative component records locally & sync batch without overriding handleSaveScores status on conflict
+      const allowedSummatives = summativesToSave.filter((item) =>
+        authorizeSubjectAssessmentWrite({
+          user: effectiveUser,
+          subjectId: item.subjectId,
+          classId: item.classId,
+          academicYear: item.academicYear,
+          semester: item.semester,
+          teachers: db.teachers,
+          teachingAssignments: db.teachingAssignments,
+          assessmentPolicy: db.assessmentPolicy,
+          authContext
+        }).allowed
+      );
+      if (allowedSummatives.length > 0) {
+        updateDbAndSave((prev) => {
+          const map = new Map((prev.summativeAssessments || []).map((a) => [a.id, a]));
+          allowedSummatives.forEach((item) => map.set(item.id, item));
+          return { ...prev, summativeAssessments: Array.from(map.values()) };
+        }, true);
+        saveBatchToFirestoreDirect('summative_assessments', allowedSummatives).then((res) => {
+          if (!res.success) {
+            pushAlert('warning', res.message || 'Sebagian komponen sumatif gagal disinkronkan ke server.');
+          }
+        });
+      }
+    }
+    if (scoresToSave.length > 0) {
+      handleSaveScores(scoresToSave, notification);
     }
   };
 
@@ -1434,7 +2029,19 @@ export default function App() {
   };
 
   const handleSaveFormative = (fa: FormativeAssessment) => {
-    if (currentUser?.role !== 'admin' && isPeriodInputLocked(db.assessmentPolicy, fa.academicYear, fa.semester)) {
+    const authRes = authorizeSubjectAssessmentWrite({
+      user: effectiveUser,
+      subjectId: fa.subjectId,
+      classId: fa.classId,
+      academicYear: fa.academicYear,
+      semester: fa.semester,
+      teachers: db.teachers,
+      teachingAssignments: db.teachingAssignments,
+      assessmentPolicy: db.assessmentPolicy,
+      authContext
+    });
+    if (!authRes.allowed) {
+      pushAlert('error', authRes.reason || 'Akses simpan asesmen formatif ditolak.');
       return;
     }
     updateDbAndSave(
@@ -1448,15 +2055,28 @@ export default function App() {
   };
 
   const handleSaveSummative = (sa: SummativeAssessment) => {
-    if (currentUser?.role !== 'admin' && isPeriodInputLocked(db.assessmentPolicy, sa.academicYear, sa.semester)) {
+    const authRes = authorizeSubjectAssessmentWrite({
+      user: effectiveUser,
+      subjectId: sa.subjectId,
+      classId: sa.classId,
+      academicYear: sa.academicYear,
+      semester: sa.semester,
+      teachers: db.teachers,
+      teachingAssignments: db.teachingAssignments,
+      assessmentPolicy: db.assessmentPolicy,
+      authContext
+    });
+    if (!authRes.allowed) {
+      pushAlert('error', authRes.reason || 'Akses simpan asesmen sumatif ditolak.');
       return;
     }
+
     updateDbAndSave(
       (prev) => {
         const filtered = (prev.summativeAssessments || []).filter(a => a.id !== sa.id);
         const newSummatives = [...filtered, sa];
 
-        // Harmonize & synchronize with prev.scores in real time (preserving multi-TP linkage)
+        // Harmonize sumatifMateriScores without ever overwriting locked/finalized finalScore or forcing 50:50
         const studentSummatives = newSummatives.filter(
           a =>
             a.studentId === sa.studentId &&
@@ -1480,35 +2100,76 @@ export default function App() {
           }
         });
 
-        const avgs = Object.values(tpAverages);
-        const avgMateri = avgs.length > 0 ? Math.round(avgs.reduce((p, c) => p + c, 0) / avgs.length) : 0;
-        
         const scoreKey = (s: AssessmentScore) =>
           `${s.studentId}-${s.subjectId}-${(s.academicYear || '').replace(/\//g, '_')}-${s.semester}`;
         const targetKey = `${sa.studentId}-${sa.subjectId}-${(sa.academicYear || '').replace(/\//g, '_')}-${sa.semester}`;
 
         const existingScore = prev.scores.find(s => scoreKey(s) === targetKey);
-        const sasScore = existingScore?.sumatifAkhirSemester || 0;
-        const finalCalculated = sasScore > 0 ? Math.round(avgMateri * 0.5 + sasScore * 0.5) : avgMateri;
-        const pred = calculatePredicate(finalCalculated, 75);
+        const legacyCheck = checkLegacyScoreProtection({
+          score: existingScore,
+          academicYears: prev.academicYears,
+          assessmentPolicy: prev.assessmentPolicy,
+          user: currentUser
+        });
+
+        // If existing score is protected/finalized, preserve score row untouched
+        if (existingScore && legacyCheck.isProtected) {
+          return {
+            ...prev,
+            summativeAssessments: newSummatives
+          };
+        }
+
+        const weights = resolveSchoolWeights(prev.curricula);
+        const contextChapters = (prev.learningChapters || []).filter(
+          (ch) =>
+            ch.subjectId === sa.subjectId &&
+            ch.classId === sa.classId &&
+            ch.academicYear === sa.academicYear &&
+            ch.semester === sa.semester
+        );
+        const calcResult = computeStudentReportScore({
+          chapters: contextChapters,
+          chapterScores: existingScore?.chapterScores,
+          sasScore: getEffectiveSasScore(existingScore),
+          formatifScores: existingScore?.formatifScores,
+          manualFinalScore: existingScore?.manualFinalScore,
+          formatifWeightPercent: weights.formatifWeightPercent,
+          sumatifWeightPercent: weights.sumatifWeightPercent,
+          passingCriteria: weights.passingCriteria,
+          legacyMateriScores: { ...(existingScore?.sumatifMateriScores || {}), ...tpAverages }
+        });
+
+        // Preserve existing finalScore unless school weights or explicit formula yielded a valid score for non-finalized records
+        const resolvedFinalScore =
+          existingScore?.manualFinalScore !== undefined
+            ? existingScore.finalScore
+            : calcResult.finalScore ?? existingScore?.finalScore ?? 0;
+        const pred = calculatePredicate(resolvedFinalScore, weights.passingCriteria);
         const isManualOrLockedDesc =
           existingScore?.descriptionStatus === 'Sudah diedit guru' ||
           existingScore?.descriptionStatus === 'Sudah disimpan' ||
           existingScore?.descriptionStatus === 'Sudah difinalisasi';
 
+        const deterministicId =
+          existingScore?.id ||
+          buildDeterministicScoreId(sa.studentId, sa.subjectId, sa.academicYear, sa.semester);
+
         const updatedScore: AssessmentScore = existingScore
           ? {
               ...existingScore,
               sumatifMateriScores: { ...existingScore.sumatifMateriScores, ...tpAverages },
-              finalScore: finalCalculated,
+              finalScore: resolvedFinalScore,
               predicate: pred,
               descriptionStatus: isManualOrLockedDesc
                 ? existingScore.descriptionStatus
                 : (existingScore.descriptionStatus || 'Belum dibuat'),
-              updatedAt: new Date().toISOString()
+              updatedAt: new Date().toISOString(),
+              updatedBy: currentUser?.name,
+              updatedById: currentUser?.id
             }
           : {
-              id: `sc-${Date.now()}-${sa.studentId}`,
+              id: deterministicId,
               studentId: sa.studentId,
               subjectId: sa.subjectId,
               classId: sa.classId,
@@ -1517,12 +2178,15 @@ export default function App() {
               formatifScores: {},
               sumatifMateriScores: tpAverages,
               sumatifAkhirSemester: 0,
-              finalScore: finalCalculated,
+              hasSasScore: false,
+              finalScore: resolvedFinalScore,
               predicate: pred,
               highestCompetenceDesc: '',
               lowestCompetenceDesc: '',
               descriptionStatus: 'Belum dibuat',
               updatedAt: new Date().toISOString(),
+              updatedBy: currentUser?.name,
+              updatedById: currentUser?.id,
               status: 'SELESAI'
             };
 
@@ -1530,7 +2194,6 @@ export default function App() {
           ? prev.scores.map(s => (scoreKey(s) === targetKey ? updatedScore : s))
           : [...prev.scores, updatedScore];
 
-        // Also surgically sync the score to Firestore
         surgicalSync('assessment_scores', updatedScore.id, updatedScore).catch(() => {});
 
         return {
@@ -1546,12 +2209,22 @@ export default function App() {
 
   const handleDeleteSummative = (id: string) => {
     const existing = (db.summativeAssessments || []).find(a => a.id === id);
-    if (
-      existing &&
-      currentUser?.role !== 'admin' &&
-      isPeriodInputLocked(db.assessmentPolicy, existing.academicYear, existing.semester)
-    ) {
-      return;
+    if (existing) {
+      const authRes = authorizeSubjectAssessmentWrite({
+        user: effectiveUser,
+        subjectId: existing.subjectId,
+        classId: existing.classId,
+        academicYear: existing.academicYear,
+        semester: existing.semester,
+        teachers: db.teachers,
+        teachingAssignments: db.teachingAssignments,
+        assessmentPolicy: db.assessmentPolicy,
+        authContext
+      });
+      if (!authRes.allowed) {
+        pushAlert('error', authRes.reason || 'Akses hapus nilai sumatif ditolak.');
+        return;
+      }
     }
     updateDbAndSave((prev) => ({
       ...prev,
@@ -1836,7 +2509,38 @@ export default function App() {
           onToggleDutyMode={setDutyMode}
           canSwitchDutyMode={canSwitchDutyMode}
           homeroomClassName={homeroomClass?.name}
+          authContext={authContext}
+          lastSaveStatus={lastSaveStatus}
         />
+
+        {/* Global Action / Server Error / Conflict Banner */}
+        {appAlertBanner && (
+          <div
+            className={`mx-4 sm:mx-6 lg:mx-8 mt-4 p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 shadow-xs ${
+              appAlertBanner.type === 'error'
+                ? 'bg-rose-50 border-rose-300 text-rose-900'
+                : appAlertBanner.type === 'warning'
+                ? 'bg-amber-50 border-amber-300 text-amber-900'
+                : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold">
+              {appAlertBanner.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              )}
+              <span>{appAlertBanner.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAppAlertBanner(null)}
+              className="p-1 rounded-lg hover:bg-black/5 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Main Content Area */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 custom-scrollbar print:p-0 print:m-0 print:overflow-visible">
@@ -2047,48 +2751,72 @@ export default function App() {
           {activeMenu === 'asesmen-formatif' && (
             <AsesmenFormatifView
               classrooms={db.classrooms}
-              students={db.students}
               subjects={db.subjects}
               learningObjectives={db.learningObjectives}
-              formativeAssessments={db.formativeAssessments || []}
-              onSaveAssessment={handleSaveFormative}
-              onSaveAssessmentsBatch={handleSaveFormativesBatch}
-              onDeleteAssessment={(id) => {
-                addDeletedEntityId('formative_assessments', id);
-                updateDbAndSave((prev) => ({
-                  ...prev,
-                  formativeAssessments: (prev.formativeAssessments || []).filter((a) => a.id !== id)
-                }), true);
-                deleteDocFromFirestore('formative_assessments', id).catch(() => {});
-              }}
-              currentUser={effectiveUser}
-              teachingAssignments={db.teachingAssignments || []}
-              teachers={db.teachers}
-              academicYear={db.schoolProfile.activeAcademicYear}
-              semester={db.schoolProfile.activeSemester}
-              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
-            />
-          )}
-
-          {activeMenu === 'asesmen-sumatif' && (
-            <AsesmenSumatifView
-              classrooms={db.classrooms}
-              students={db.students}
-              subjects={db.subjects}
-              learningObjectives={db.learningObjectives}
-              learningChapters={db.learningChapters || []}
+              learningChapters={db.learningChapters || EMPTY_ARRAY}
+              summativePlans={db.summativePlans || EMPTY_ARRAY}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
-              onSaveAssessment={handleSaveSummative}
-              onSaveAssessmentsBatch={handleSaveSummativesBatch}
-              onDeleteAssessment={handleDeleteSummative}
-              onSaveLearningChapter={handleSaveLearningChapter}
-              onDeleteLearningChapter={handleDeleteLearningChapter}
+              scores={db.scores}
+              onSaveObjective={handleSaveObjective}
+              onDeleteObjective={handleDeleteObjective}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               teachers={db.teachers}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}
               assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
+              authContext={authContext}
+            />
+          )}
+
+          {activeMenu === 'asesmen-sumatif' && (
+            <AsesmenSumatifView
+              classrooms={db.classrooms}
+              subjects={db.subjects}
+              learningObjectives={db.learningObjectives}
+              learningChapters={db.learningChapters || EMPTY_ARRAY}
+              summativePlans={db.summativePlans || EMPTY_ARRAY}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
+              scores={db.scores}
+              onSaveLearningChapter={handleSaveLearningChapter}
+              onDeleteLearningChapter={handleDeleteLearningChapter}
+              onSaveSummativePlan={handleSaveSummativePlan}
+              onDeleteSummativePlan={handleDeleteSummativePlan}
+              onSaveObjective={handleSaveObjective}
+              currentUser={effectiveUser}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              teachers={db.teachers}
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
+              authContext={authContext}
+            />
+          )}
+
+          {activeMenu === 'pengolahan-nilai-tabel' && (
+            <PengolahanNilaiTabelView
+              schoolName={db.schoolProfile?.name || 'SMP Negeri 1 Rangsang'}
+              classrooms={db.classrooms}
+              students={db.students}
+              subjects={db.subjects}
+              curricula={db.curricula}
+              teachers={db.teachers}
+              teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              learningChapters={db.learningChapters || EMPTY_ARRAY}
+              summativePlans={db.summativePlans || EMPTY_ARRAY}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
+              scores={db.scores}
+              academicYears={db.academicYears}
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              currentUser={effectiveUser}
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
+              authContext={authContext}
+              lastSaveStatus={lastSaveStatus}
+              onSaveSpreadsheetBatch={handleSaveSpreadsheetBatch}
+              onConfirmExcelImport={handleConfirmExcelImport}
             />
           )}
 

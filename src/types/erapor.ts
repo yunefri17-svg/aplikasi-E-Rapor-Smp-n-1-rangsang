@@ -1,6 +1,57 @@
 export type UserRole = 'admin' | 'guru' | 'walikelas' | 'kepsek';
 export type DutyMode = 'walikelas' | 'guru';
 
+export type AuthVerificationStatus =
+  | 'verified_password'
+  | 'verified_google'
+  | 'unverified_anonymous_fallback';
+
+export interface AuthSessionContext {
+  firebaseUid?: string;
+  verificationStatus: AuthVerificationStatus;
+  providerId: string;
+  boundUserId?: string;
+  boundRole?: UserRole;
+  passwordLengthEligible?: boolean;
+  notice?: string;
+  verifiedAt?: string;
+}
+
+export interface UserPublicProfile {
+  id: string;
+  username: string;
+  name: string;
+  role: UserRole;
+  nip?: string;
+  teacherId?: string;
+  classId?: string;
+  status?: 'active' | 'inactive';
+  firebaseUid?: string;
+  verificationStatus?: AuthVerificationStatus;
+  updatedAt?: string;
+}
+
+export type SaveSyncStatus =
+  | 'IDLE'
+  | 'SAVING'
+  | 'SAVED_SERVER'
+  | 'LOCAL_ONLY_QUOTA'
+  | 'CONFLICT_DETECTED'
+  | 'FAILED_SERVER';
+
+export interface SaveOperationResult<T = unknown> {
+  success: boolean;
+  savedToServer: boolean;
+  status: SaveSyncStatus;
+  count?: number;
+  message?: string;
+  error?: string;
+  conflictDetected?: boolean;
+  quotaExceeded?: boolean;
+  timestamp?: string;
+  data?: T;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -13,6 +64,8 @@ export interface User {
   status?: 'active' | 'inactive';
   password?: string;
   activeDutyMode?: DutyMode; // For teachers with dual roles (Wali Kelas + Guru Mapel)
+  firebaseUid?: string;
+  authVerificationStatus?: AuthVerificationStatus;
 }
 
 export interface TeachingAssignment {
@@ -143,6 +196,7 @@ export interface LearningObjective {
   id: string;
   curriculumId: string;
   subjectId: string;
+  classId?: string; // Optional specific class binding (omitted = applies to all classes in gradeLevel)
   gradeLevel: '7' | '8' | '9';
   code: string; // e.g. "TP 7.1"
   description: string;
@@ -151,6 +205,8 @@ export interface LearningObjective {
   materi?: string; // Lingkup materi / topik kompetensi
   phase?: string; // e.g. "Fase D"
   createdByTeacherId?: string;
+  teacherId?: string;
+  updatedBy?: string;
   updatedAt?: string;
 }
 
@@ -170,6 +226,28 @@ export interface LearningChapter {
   isLocked?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SummativeAssessmentPlan {
+  id: string;
+  title: string; // e.g. "Sumatif BAB 1", "Sumatif BAB 2"
+  chapterId: string; // Parent BAB Materi (LearningChapter)
+  chapterCode?: string;
+  chapterTitle?: string;
+  tpIds: string[]; // References existing TP IDs from assessments without duplicating TP records
+  subjectId: string;
+  classId: string;
+  gradeLevel: '7' | '8' | '9';
+  teacherId: string;
+  academicYear: string;
+  semester: 'Ganjil' | 'Genap';
+  technique?: SummativeTechnique;
+  assessmentDate?: string;
+  description?: string;
+  isLocked?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy?: string;
 }
 
 export type TPAttainmentStatus =
@@ -224,6 +302,16 @@ export interface AssessmentScore {
   hasMissingComponents?: boolean; // True when any BAB or SAS is still empty
   missingComponentNote?: string; // Warning note detailing missing BABs / SAS
   finalScore: number;
+  formatifAverage?: number; // Computed average of formative assessments (50% weight)
+  sumatifAverage?: number; // Computed average of all summative components including SAS (50% weight)
+  rawFinalScore?: number; // Exact decimal final score before rounding (e.g. 79.38)
+  completenessStatus?: 'LENGKAP' | 'BELUM_LENGKAP';
+  finalScoreStatus?:
+    | 'FINAL_VALID'
+    | 'MANUAL_OVERRIDE'
+    | 'DRAFT_INCOMPLETE'
+    | 'TERKUNCI'
+    | 'BELUM_DIHITUNG';
   predicate: 'A' | 'B' | 'C' | 'D';
   highestCompetenceDesc: string;
   lowestCompetenceDesc: string;
@@ -353,6 +441,8 @@ export interface SummativeAssessment {
   teacherId: string;
   subjectId: string;
   classId: string;
+  planId?: string; // Reference to SummativeAssessmentPlan
+  planTitle?: string;
   chapterId?: string; // Primary BAB Materi ID (Requirement B)
   chapterCode?: string; // e.g. "BAB 1"
   chapterTitle?: string; // e.g. "Bilangan Bulat"

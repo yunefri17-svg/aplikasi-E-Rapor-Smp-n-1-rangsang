@@ -18,6 +18,7 @@ import {
   TeachingAssignment,
   FormativeAssessment,
   SummativeAssessment,
+  SummativeAssessmentPlan,
   KKTPConfig,
   SubjectFinalScoreConfig,
   AcademicYearPeriod,
@@ -96,6 +97,7 @@ export interface AppDatabase {
   teachingAssignments: TeachingAssignment[];
   // Kurikulum Merdeka 2025
   learningChapters: LearningChapter[];
+  summativePlans: SummativeAssessmentPlan[];
   formativeAssessments: FormativeAssessment[];
   summativeAssessments: SummativeAssessment[];
   kktpConfigs: KKTPConfig[];
@@ -158,6 +160,26 @@ const filterDeletedChapters = (list: LearningChapter[]): LearningChapter[] => {
   }
 };
 
+const filterDeletedSummativePlans = (list: SummativeAssessmentPlan[]): SummativeAssessmentPlan[] => {
+  try {
+    const rawTombstones = localStorage.getItem(DELETED_ENTITIES_KEY);
+    if (!rawTombstones) return list;
+    const parsedTombstones = JSON.parse(rawTombstones) as Record<string, string[]>;
+    const deletedSet = new Set<string>([
+      ...(Array.isArray(parsedTombstones.summative_plans) ? parsedTombstones.summative_plans : []),
+      ...(Array.isArray(parsedTombstones.summativePlans) ? parsedTombstones.summativePlans : [])
+    ]);
+    if (deletedSet.size === 0) return list;
+    return list.filter((pl) => {
+      if (!pl || !pl.id) return false;
+      const sanitized = String(pl.id).replace(/[\/\s#\[\]*?]/g, '_');
+      return !deletedSet.has(pl.id) && !deletedSet.has(sanitized);
+    });
+  } catch {
+    return list;
+  }
+};
+
 export const loadDatabase = (): AppDatabase => {
   try {
     let raw = localStorage.getItem(STORAGE_KEY);
@@ -187,6 +209,9 @@ export const loadDatabase = (): AppDatabase => {
               parentPhone: s.parentPhone || init?.parentPhone || '0812-7000-1111'
             };
           });
+          if (!Array.isArray(parsedLegacy.summativePlans)) {
+            parsedLegacy.summativePlans = [];
+          }
           saveDatabase(parsedLegacy);
           return parsedLegacy;
         } catch (e) {
@@ -213,6 +238,7 @@ export const loadDatabase = (): AppDatabase => {
         descriptionBank: defaultDescriptionBank,
         teachingAssignments: initialTeachingAssignments,
         learningChapters: [],
+        summativePlans: [],
         formativeAssessments: initialFormativeAssessments,
         summativeAssessments: initialSummativeAssessments,
         kktpConfigs: initialKKTPConfigs,
@@ -334,6 +360,9 @@ export const loadDatabase = (): AppDatabase => {
         learningChapters: filterDeletedChapters(
           Array.isArray(parsed.learningChapters) ? parsed.learningChapters : []
         ),
+        summativePlans: filterDeletedSummativePlans(
+          Array.isArray(parsed.summativePlans) ? parsed.summativePlans : []
+        ),
         formativeAssessments: parsed.formativeAssessments?.length ? parsed.formativeAssessments : initialFormativeAssessments,
         summativeAssessments: parsed.summativeAssessments?.length ? parsed.summativeAssessments : initialSummativeAssessments,
         kktpConfigs: parsed.kktpConfigs?.length ? parsed.kktpConfigs : initialKKTPConfigs,
@@ -379,6 +408,7 @@ export const loadDatabase = (): AppDatabase => {
       descriptionBank: defaultDescriptionBank,
       teachingAssignments: initialTeachingAssignments,
       learningChapters: [],
+      summativePlans: [],
       formativeAssessments: [],
       summativeAssessments: [],
       kktpConfigs: [],
@@ -667,6 +697,7 @@ export const partialPurgeMasterData = (db: AppDatabase): AppDatabase => {
   updatedDb.formativeAssessments = [];
   updatedDb.summativeAssessments = [];
   updatedDb.learningChapters = [];
+  updatedDb.summativePlans = [];
   updatedDb.kktpConfigs = [];
   updatedDb.finalScoreConfigs = [];
   

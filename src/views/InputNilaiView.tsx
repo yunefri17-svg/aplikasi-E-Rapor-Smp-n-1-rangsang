@@ -18,7 +18,15 @@ import {
   User
 } from '../types/erapor';
 import { ReportScoreExcelTab } from '../components/assessment/ReportScoreExcelTab';
-import { resolveSchoolWeights, filterChaptersForContext } from '../utils/assessmentCalculation';
+import {
+  resolveSchoolWeights,
+  filterChaptersForContext,
+  computeStudentReportScore,
+  calculateFormativeAverage,
+  formatScoreDecimal,
+  getEffectiveSasScore,
+  buildDeterministicScoreId
+} from '../utils/assessmentCalculation';
 import {
   FileSpreadsheet,
   Save,
@@ -42,6 +50,7 @@ import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
 import { sortSubjects } from '../utils/subjectSort';
+import { resolveTeacherForUser } from '../utils/teacherAssignmentHelper';
 import { SubjectDescriptionBank } from '../utils/descriptionBank';
 import {
   StudentTPAttainmentResult,
@@ -127,14 +136,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   const [activeInputTab, setActiveInputTab] = useState<'input' | 'excel'>('input');
 
   const currentTeacher = useMemo(() => {
-    return teachers.find(
-      (t) =>
-        (currentUser.teacherId && t.id === currentUser.teacherId) ||
-        (currentUser.nip && t.nip === currentUser.nip) ||
-        (t.name.toLowerCase().includes('fauzi') && currentUser.name.toLowerCase().includes('fauzi')) ||
-        (t.name.toLowerCase().includes('nikmatul') && currentUser.name.toLowerCase().includes('nikmatul')) ||
-        t.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim()
-    );
+    return resolveTeacherForUser(currentUser, teachers);
   }, [teachers, currentUser]);
 
   const visibleSubjects = useMemo(() => {
@@ -279,9 +281,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   const currentClass = classrooms.find((c) => c.id === selectedClass);
   const currentSubjectObj = subjects.find((s) => s.id === selectedSubject);
   const currentGrade = currentClass?.gradeLevel || '7';
-  const curMerdeka = curricula.find((c) => c.id === 'cur-merdeka') || curricula[0];
-  const formatifWeight = (curMerdeka?.formatifWeight || 50) / 100;
-  const sumatifWeight = (curMerdeka?.sumatifWeight || 50) / 100;
+  const weights = useMemo(() => resolveSchoolWeights(curricula), [curricula]);
+  const passingCriteria = currentSubjectObj?.kkm || weights.passingCriteria;
 
   const isElectiveActiveSubject = isElectiveSubject(currentSubjectObj);
 
@@ -341,6 +342,80 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     [learningObjectives, selectedSubject, currentGrade, semester, academicYear]
   );
 
+  const relevantChapters = useMemo(
+    () =>
+      filterChaptersForContext(learningChapters || [], {
+        subjectId: selectedSubject,
+        classId: selectedClass,
+        academicYear,
+        semester
+      }),
+    [learningChapters, selectedSubject, selectedClass, academicYear, semester]
+  );
+
+  const formativeEntriesByStudent = useMemo(() => {
+    const sanitizedYear = (academicYear || '').replace(/\//g, '_');
+    const grouped: Record<string, Record<string, number>> = {};
+    (formativeAssessments || []).forEach((a) => {
+      if (
+        a.subjectId === selectedSubject &&
+        (a.academicYear === academicYear || (a.academicYear || '').replace(/\//g, '_') === sanitizedYear) &&
+        a.semester === semester &&
+        typeof a.score === 'number' &&
+        Number.isFinite(a.score)
+      ) {
+        if (!grouped[a.studentId]) grouped[a.studentId] = {};
+        grouped[a.studentId][a.id] = a.score;
+      }
+    });
+    return grouped;
+  }, [formativeAssessments, selectedSubject, academicYear, semester]);
+
+  const computeRowCalculation = (params: {
+    formatifScores?: Record<string, number>;
+    sumatifMateriScores?: Record<string, number>;
+    chapterScores?: Record<string, number>;
+    sasScore?: number;
+    manualFinalScore?: number;
+  }) => {
+    const useTpAsChapters = relevantTPs.length > 0;
+    const chapterDescriptors: LearningChapter[] = useTpAsChapters
+      ? relevantTPs.map(
+          (tp, idx) =>
+            ({
+              id: tp.id,
+              code: tp.code || `TP ${idx + 1}`,
+              orderIndex: idx + 1,
+              title: tp.materi || tp.description,
+              subjectId: selectedSubject,
+              classId: selectedClass,
+              gradeLevel: currentGrade as '7' | '8' | '9',
+              teacherId: currentTeacher?.id || '',
+              academicYear,
+              semester,
+              createdAt: '',
+              updatedAt: ''
+            }) as LearningChapter
+        )
+      : relevantChapters;
+
+    const effectiveChapterScores = useTpAsChapters
+      ? params.sumatifMateriScores || {}
+      : params.chapterScores || params.sumatifMateriScores || {};
+
+    return computeStudentReportScore({
+      chapters: chapterDescriptors,
+      chapterScores: effectiveChapterScores,
+      sasScore: params.sasScore,
+      formatifScores: params.formatifScores,
+      manualFinalScore: params.manualFinalScore,
+      formatifWeightPercent: weights.formatifWeightPercent,
+      sumatifWeightPercent: weights.sumatifWeightPercent,
+      passingCriteria,
+      legacyMateriScores: params.sumatifMateriScores
+    });
+  };
+
   // Per-student formative/summative attainment analysis (strictly supportive reference, NEVER auto-assigns checklists)
   const analysisByStudent = useMemo(() => {
     const map: Record<string, StudentTPAttainmentResult> = {};
@@ -386,7 +461,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
 
   const [localScores, setLocalScores] = useState<Record<string, AssessmentScore>>({});
 
-  // Hydrate from stored scores cleanly WITHOUT fabricating descriptions or forcing checklists from formatif/sumatif
+  // Hydrate from stored scores cleanly WITHOUT fabricating descriptions, double-counting formatif, or overwriting legacy scores
   useEffect(() => {
     const map: Record<string, AssessmentScore> = {};
     const sanitizedYear = (academicYear || '').replace(/\//g, '_');
@@ -425,6 +500,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
         }
       });
 
+      const moduleFormatifMap = formativeEntriesByStudent[std.id] || {};
+      const hasModuleFormatif = Object.keys(moduleFormatifMap).length > 0;
       const hasSummativeData = Object.keys(tpAveragesFromSummative).length > 0;
       const validTpIdSet = new Set(relevantTPs.map((t) => t.id));
 
@@ -434,25 +511,49 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           ...tpAveragesFromSummative
         };
 
+        // Prevent double-counting Formatif: if teacher manually set 'default' override in formatifScores, use that;
+        // otherwise merge module formative IDs cleanly (existing IDs overwritten by fresh module IDs without duplicating).
+        const existingFmt = existing.formatifScores || {};
+        const effectiveFormatifScores: Record<string, number> =
+          existingFmt.default !== undefined
+            ? { default: existingFmt.default }
+            : Object.keys(existingFmt).length > 0 || hasModuleFormatif
+            ? { ...existingFmt, ...moduleFormatifMap }
+            : {};
+
+        const sasVal = getEffectiveSasScore(existing);
+        const calc = computeRowCalculation({
+          formatifScores: effectiveFormatifScores,
+          sumatifMateriScores: mergedSumatifMateri,
+          chapterScores: existing.chapterScores,
+          sasScore: sasVal,
+          manualFinalScore: existing.manualFinalScore
+        });
+
+        const isProtectedOrManual =
+          existing.status === 'TERKUNCI' || existing.manualFinalScore !== undefined;
+        const hasAnyActiveComponent =
+          hasModuleFormatif ||
+          hasSummativeData ||
+          Object.keys(effectiveFormatifScores).length > 0 ||
+          Object.keys(mergedSumatifMateri).length > 0 ||
+          sasVal !== undefined;
+
         let calculatedFinal = existing.finalScore;
         let calculatedPred = existing.predicate;
+        let calculatedRaw = existing.rawFinalScore;
 
         if (existing.manualFinalScore !== undefined) {
           calculatedFinal = existing.manualFinalScore;
-          calculatedPred = calculatePredicate(calculatedFinal, 75);
-        } else if (hasSummativeData) {
-          const materiVals = relevantTPs
-            .map((tp) => mergedSumatifMateri[tp.id])
-            .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
-
-          const avgMateri =
-            materiVals.length > 0
-              ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
-              : existing.finalScore;
-
-          const sas = existing.sumatifAkhirSemester ?? 0;
-          calculatedFinal = sas > 0 ? Math.round(avgMateri * formatifWeight + sas * sumatifWeight) : avgMateri;
-          calculatedPred = calculatePredicate(calculatedFinal, 75);
+          calculatedPred = calculatePredicate(calculatedFinal, passingCriteria);
+          calculatedRaw = calculatedFinal;
+        } else if (!isProtectedOrManual && (hasModuleFormatif || hasSummativeData) && calc.finalScore !== undefined) {
+          calculatedFinal = calc.finalScore;
+          calculatedRaw = calc.rawFinalScore;
+          calculatedPred = calc.predicate || calculatePredicate(calculatedFinal, passingCriteria);
+        } else if (!hasAnyActiveComponent) {
+          calculatedFinal = existing.finalScore;
+          calculatedPred = existing.predicate;
         }
 
         const optIds = Array.isArray(existing.selectedOptimalTpIds)
@@ -464,22 +565,32 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
 
         map[std.id] = {
           ...existing,
+          formatifScores: effectiveFormatifScores,
+          formatifAverage: calc.formatifAverage ?? existing.formatifAverage,
           sumatifMateriScores: mergedSumatifMateri,
+          sumatifAverage: calc.sumatifAverage ?? existing.sumatifAverage,
+          hasSasScore: sasVal !== undefined,
+          rawFinalScore: calculatedRaw,
           finalScore: calculatedFinal,
           predicate: calculatedPred,
+          completenessStatus: calc.completenessStatus,
+          hasMissingComponents: calc.hasMissingComponents,
+          missingComponentNote: calc.missingComponentNote,
+          finalScoreBreakdown: calc.breakdownText || existing.finalScoreBreakdown,
           selectedOptimalTpIds: optIds,
           selectedImprovementTpIds: impIds
         };
       } else {
         const initialSumatifMateri: Record<string, number> = { ...tpAveragesFromSummative };
-        const materiVals = Object.values(initialSumatifMateri).filter(
-          (v): v is number => typeof v === 'number' && !Number.isNaN(v)
-        );
-        const avgMateri =
-          materiVals.length > 0 ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length) : 0;
+        const initialFormatif: Record<string, number> = { ...moduleFormatifMap };
+        const calc = computeRowCalculation({
+          formatifScores: initialFormatif,
+          sumatifMateriScores: initialSumatifMateri,
+          sasScore: undefined
+        });
 
         map[std.id] = {
-          id: `sc-${std.id}-${selectedSubject}-${sanitizedYear}-${semester}`,
+          id: buildDeterministicScoreId(std.id, selectedSubject, academicYear, semester),
           studentId: std.id,
           studentName: std.name,
           subjectId: selectedSubject,
@@ -490,11 +601,19 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           teacherName: currentTeacher?.name || currentUser.name,
           academicYear,
           semester,
-          formatifScores: {},
+          formatifScores: initialFormatif,
+          formatifAverage: calc.formatifAverage,
           sumatifMateriScores: initialSumatifMateri,
           sumatifAkhirSemester: 0,
-          finalScore: avgMateri,
-          predicate: calculatePredicate(avgMateri, 75),
+          hasSasScore: false,
+          sumatifAverage: calc.sumatifAverage,
+          rawFinalScore: calc.rawFinalScore,
+          finalScore: calc.finalScore ?? 0,
+          predicate: calc.predicate || 'D',
+          completenessStatus: calc.completenessStatus,
+          hasMissingComponents: calc.hasMissingComponents,
+          missingComponentNote: calc.missingComponentNote,
+          finalScoreBreakdown: calc.breakdownText,
           selectedOptimalTpIds: [],
           selectedImprovementTpIds: [],
           highestCompetenceDesc: '',
@@ -519,14 +638,17 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     students,
     scores,
     summativeAssessments,
+    formativeEntriesByStudent,
     relevantTPs,
+    relevantChapters,
     currentTeacher?.id,
     currentTeacher?.name,
     currentSubjectObj?.name,
     currentClass?.name,
     currentUser.name,
-    formatifWeight,
-    sumatifWeight
+    weights.formatifWeightPercent,
+    weights.sumatifWeightPercent,
+    passingCriteria
   ]);
 
   const handleSyncFromSummative = () => {
@@ -536,6 +658,9 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     let matchedCount = 0;
 
     classStudents.forEach((std) => {
+      const current = map[std.id];
+      if (!current || current.status === 'TERKUNCI') return;
+
       const studentSummative = summativeAssessments.filter(
         (a) =>
           a.studentId === std.id &&
@@ -543,8 +668,6 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           (a.academicYear === academicYear || (a.academicYear || '').replace(/\//g, '_') === sanitizedYear) &&
           a.semester === semester
       );
-
-      if (studentSummative.length === 0) return;
 
       const tpScores: Record<string, number[]> = {};
       studentSummative.forEach((a) => {
@@ -562,34 +685,40 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
         }
       });
 
-      if (Object.keys(tpAveragesFromSummative).length > 0) {
+      const moduleFormatifMap = formativeEntriesByStudent[std.id] || {};
+      const hasFormatif = Object.keys(moduleFormatifMap).length > 0;
+      const hasSummative = Object.keys(tpAveragesFromSummative).length > 0;
+
+      if (hasFormatif || hasSummative) {
         matchedCount++;
-        const current = map[std.id];
-        if (!current) return;
         const mergedMateri = {
           ...(current.sumatifMateriScores || {}),
           ...tpAveragesFromSummative
         };
+        const syncedFormatif = hasFormatif ? { ...moduleFormatifMap } : current.formatifScores;
+        const sasVal = getEffectiveSasScore(current);
 
-        const materiVals = relevantTPs
-          .map((tp) => mergedMateri[tp.id])
-          .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
-
-        const avgMateri =
-          materiVals.length > 0
-            ? Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
-            : current.finalScore || 0;
-
-        const sas = current.sumatifAkhirSemester ?? 0;
-        const finalCalculated = sas > 0 ? Math.round(avgMateri * formatifWeight + sas * sumatifWeight) : avgMateri;
-        const pred = calculatePredicate(finalCalculated, 75);
+        const calc = computeRowCalculation({
+          formatifScores: syncedFormatif,
+          sumatifMateriScores: mergedMateri,
+          chapterScores: current.chapterScores,
+          sasScore: sasVal
+        });
 
         map[std.id] = {
           ...current,
+          formatifScores: syncedFormatif,
+          formatifAverage: calc.formatifAverage,
           sumatifMateriScores: mergedMateri,
+          sumatifAverage: calc.sumatifAverage,
+          rawFinalScore: calc.rawFinalScore,
           manualFinalScore: undefined,
-          finalScore: finalCalculated,
-          predicate: pred,
+          finalScore: calc.finalScore ?? current.finalScore ?? 0,
+          predicate: calc.predicate || calculatePredicate(calc.finalScore ?? current.finalScore ?? 0, passingCriteria),
+          completenessStatus: calc.completenessStatus,
+          hasMissingComponents: calc.hasMissingComponents,
+          missingComponentNote: calc.missingComponentNote,
+          finalScoreBreakdown: calc.breakdownText,
           updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
           updatedBy: currentUser.name
         };
@@ -599,8 +728,8 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     setLocalScores(map);
     setSyncSuccessMessage(
       matchedCount > 0
-        ? `${matchedCount} nilai angka disinkronkan dari Asesmen Sumatif. Silakan periksa checklist TP siswa lalu tekan "Simpan Data Nilai".`
-        : 'Seluruh nilai sudah tersinkron dengan Asesmen Sumatif.'
+        ? `${matchedCount} data nilai siswa disinkronkan dari Asesmen Formatif & Sumatif. Periksa rincian hitung lalu tekan "Simpan Data Nilai".`
+        : 'Seluruh nilai sudah tersinkron dengan Asesmen Formatif & Sumatif.'
     );
     setTimeout(() => setSyncSuccessMessage(null), 5000);
   };
@@ -611,7 +740,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
 
   const handleScoreChange = (
     studentId: string,
-    type: 'formatif' | 'sumatifMateri' | 'sas',
+    type: 'formatif' | 'formatifAverage' | 'sumatifMateri' | 'sas',
     tpId: string | null,
     rawValue: string
   ) => {
@@ -619,41 +748,65 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     const current = localScores[studentId];
     if (!current) return;
 
-    const updatedFormatif = { ...current.formatifScores };
-    const updatedSumatifMateri = { ...current.sumatifMateriScores };
+    let updatedFormatif = { ...(current.formatifScores || {}) };
+    const updatedSumatifMateri = { ...(current.sumatifMateriScores || {}) };
     let updatedSAS = current.sumatifAkhirSemester;
+    let updatedHasSas = getEffectiveSasScore(current) !== undefined;
 
     if (rawValue === '') {
-      if (type === 'formatif' && tpId) delete updatedFormatif[tpId];
-      else if (type === 'sumatifMateri' && tpId) delete updatedSumatifMateri[tpId];
-      else if (type === 'sas') updatedSAS = 0;
+      if (type === 'formatifAverage') {
+        updatedFormatif = {};
+      } else if (type === 'formatif' && tpId) {
+        delete updatedFormatif[tpId];
+      } else if (type === 'sumatifMateri' && tpId) {
+        delete updatedSumatifMateri[tpId];
+      } else if (type === 'sas') {
+        updatedSAS = 0;
+        updatedHasSas = false;
+      }
     } else {
-      const clampedVal = Math.min(100, Math.max(0, Number(rawValue) || 0));
-      if (type === 'formatif' && tpId) updatedFormatif[tpId] = clampedVal;
-      else if (type === 'sumatifMateri' && tpId) updatedSumatifMateri[tpId] = clampedVal;
-      else if (type === 'sas') updatedSAS = clampedVal;
+      const normalized = Number(String(rawValue).replace(',', '.'));
+      const clampedVal = Math.min(100, Math.max(0, Number.isFinite(normalized) ? Math.round(normalized * 100) / 100 : 0));
+      if (type === 'formatifAverage') {
+        // Store single canonical 'default' key so daily formative scores are never double-counted
+        updatedFormatif = { default: clampedVal };
+      } else if (type === 'formatif' && tpId) {
+        updatedFormatif[tpId] = clampedVal;
+      } else if (type === 'sumatifMateri' && tpId) {
+        updatedSumatifMateri[tpId] = clampedVal;
+      } else if (type === 'sas') {
+        updatedSAS = clampedVal;
+        updatedHasSas = true;
+      }
     }
 
-    const materiVals = Object.values(updatedSumatifMateri).filter(
-      (v): v is number => typeof v === 'number' && !Number.isNaN(v)
-    );
-    const avgMateri =
-      materiVals.length > 0 ? materiVals.reduce((a, b) => a + b, 0) / materiVals.length : updatedSAS;
+    const calc = computeRowCalculation({
+      formatifScores: updatedFormatif,
+      sumatifMateriScores: updatedSumatifMateri,
+      chapterScores: current.chapterScores,
+      sasScore: updatedHasSas ? updatedSAS : undefined
+    });
 
-    const finalCalculated =
-      updatedSAS > 0 ? Math.round(avgMateri * formatifWeight + updatedSAS * sumatifWeight) : Math.round(avgMateri);
-    const pred = calculatePredicate(finalCalculated, 75);
+    const finalScoreNumeric = calc.finalScore ?? 0;
 
     setLocalScores({
       ...localScores,
       [studentId]: {
         ...current,
         formatifScores: updatedFormatif,
+        formatifAverage: calc.formatifAverage,
         sumatifMateriScores: updatedSumatifMateri,
         sumatifAkhirSemester: updatedSAS,
+        hasSasScore: updatedHasSas,
+        sumatifAverage: calc.sumatifAverage,
+        rawFinalScore: calc.rawFinalScore,
         manualFinalScore: undefined,
-        finalScore: finalCalculated,
-        predicate: pred,
+        finalScore: finalScoreNumeric,
+        predicate: calc.predicate || calculatePredicate(finalScoreNumeric, passingCriteria),
+        completenessStatus: calc.completenessStatus,
+        hasMissingComponents: calc.hasMissingComponents,
+        missingComponentNote: calc.missingComponentNote,
+        finalScoreBreakdown: calc.breakdownText,
         updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
         updatedBy: currentUser.name
       }
@@ -667,25 +820,28 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     if (!current) return;
 
     if (rawValue.trim() === '') {
-      const materiVals = Object.values(current.sumatifMateriScores || {}).filter(
-        (v): v is number => typeof v === 'number' && !Number.isNaN(v)
-      );
-      const fallbackCalc =
-        materiVals.length > 0
-          ? current.sumatifAkhirSemester > 0
-            ? Math.round(
-                (materiVals.reduce((a, b) => a + b, 0) / materiVals.length) * formatifWeight +
-                  current.sumatifAkhirSemester * sumatifWeight
-              )
-            : Math.round(materiVals.reduce((a, b) => a + b, 0) / materiVals.length)
-          : current.sumatifAkhirSemester || 0;
+      const sasVal = getEffectiveSasScore(current);
+      const calc = computeRowCalculation({
+        formatifScores: current.formatifScores,
+        sumatifMateriScores: current.sumatifMateriScores,
+        chapterScores: current.chapterScores,
+        sasScore: sasVal
+      });
+      const fallbackCalc = calc.finalScore ?? 0;
       setLocalScores({
         ...localScores,
         [studentId]: {
           ...current,
           manualFinalScore: undefined,
+          formatifAverage: calc.formatifAverage,
+          sumatifAverage: calc.sumatifAverage,
+          rawFinalScore: calc.rawFinalScore,
           finalScore: fallbackCalc,
-          predicate: calculatePredicate(fallbackCalc, 75),
+          predicate: calc.predicate || calculatePredicate(fallbackCalc, passingCriteria),
+          completenessStatus: calc.completenessStatus,
+          hasMissingComponents: calc.hasMissingComponents,
+          missingComponentNote: calc.missingComponentNote,
+          finalScoreBreakdown: calc.breakdownText,
           updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
           updatedBy: currentUser.name
         }
@@ -702,8 +858,10 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
       [studentId]: {
         ...current,
         manualFinalScore: clamped,
+        rawFinalScore: clamped,
         finalScore: clamped,
-        predicate: calculatePredicate(clamped, 75),
+        predicate: calculatePredicate(clamped, passingCriteria),
+        finalScoreBreakdown: `Input langsung Nilai Akhir oleh guru: ${clamped}`,
         updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
         updatedBy: currentUser.name
       }
@@ -914,7 +1072,10 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
         (sc.selectedImprovementTpIds?.length || 0) > 0;
       const hasScoreInput =
         sc.manualFinalScore !== undefined ||
+        Object.keys(sc.formatifScores || {}).length > 0 ||
+        sc.formatifAverage !== undefined ||
         Object.keys(sc.sumatifMateriScores || {}).length > 0 ||
+        sc.hasSasScore === true ||
         sc.sumatifAkhirSemester > 0 ||
         scores.some((ex) => ex.id === sc.id);
 
@@ -1154,18 +1315,29 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
             }
           });
 
-          const materiVals = Object.values(updatedMateri);
-          const avgMateri =
-            materiVals.length > 0 ? materiVals.reduce((a, b) => a + b, 0) / materiVals.length : sasVal;
-          const finalCalculated = Math.round(avgMateri * formatifWeight + sasVal * sumatifWeight);
+          const calc = computeRowCalculation({
+            formatifScores: item.formatifScores,
+            sumatifMateriScores: updatedMateri,
+            chapterScores: item.chapterScores,
+            sasScore: sasVal
+          });
+          const finalCalculated = calc.finalScore ?? 0;
 
           updated[std.id] = {
             ...item,
             sumatifMateriScores: updatedMateri,
             sumatifAkhirSemester: sasVal,
+            hasSasScore: true,
+            formatifAverage: calc.formatifAverage,
+            sumatifAverage: calc.sumatifAverage,
+            rawFinalScore: calc.rawFinalScore,
             manualFinalScore: undefined,
             finalScore: finalCalculated,
-            predicate: calculatePredicate(finalCalculated, 75)
+            predicate: calc.predicate || calculatePredicate(finalCalculated, passingCriteria),
+            completenessStatus: calc.completenessStatus,
+            hasMissingComponents: calc.hasMissingComponents,
+            missingComponentNote: calc.missingComponentNote,
+            finalScoreBreakdown: calc.breakdownText
           };
         }
       }
@@ -1265,7 +1437,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
             className="px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
           >
             <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
-            Sinkronkan Nilai Sumatif
+            Sinkronkan Formatif &amp; Sumatif
           </button>
 
           <button
@@ -1421,11 +1593,20 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
               <BookOpen className="w-3.5 h-3.5 text-blue-600" />
               Daftar TP Mapel ({relevantTPs.length})
             </button>
-            <div className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-medium">
-              Bobot Hitung: {curMerdeka.formatifWeight}% Materi + {curMerdeka.sumatifWeight}% SAS
+            <div className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
+              Rumus: {weights.formulaLabel}
             </div>
             <div className="text-slate-500 font-semibold">{classStudents.length} Siswa</div>
           </div>
+        </div>
+
+        <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>
+            <strong className="text-slate-800">Ketentuan:</strong> Rata-rata Sumatif dihitung merata dari seluruh komponen Sumatif Lingkup Materi + SAS (SAS tidak berdiri sendiri sebagai 50%).
+          </span>
+          <span>
+            Komponen yang belum diinput ditandai <strong className="text-amber-700">Belum Lengkap</strong> dan <strong>tidak dianggap 0</strong>.
+          </span>
         </div>
 
         {relevantTPs.length === 0 ? (
@@ -1470,12 +1651,20 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                   Peserta Didik
                 </th>
 
+                <th
+                  className="px-2 py-3 text-center w-24 bg-teal-50/80 text-teal-900 border-r border-slate-200"
+                  rowSpan={2}
+                >
+                  Formatif ({weights.formatifWeightPercent}%)
+                  <span className="block text-[10px] font-normal text-teal-700">Rata-rata Harian</span>
+                </th>
+
                 {relevantTPs.length > 0 && (
                   <th
                     className="px-2 py-2 text-center bg-blue-50/70 text-blue-800 border-r border-slate-200"
                     colSpan={relevantTPs.length}
                   >
-                    Sumatif Lingkup Materi (Opsional Hitung)
+                    Sumatif Lingkup Materi (BAB / TP)
                   </th>
                 )}
 
@@ -1487,11 +1676,27 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                 </th>
 
                 <th
+                  className="px-2 py-3 text-center w-24 bg-sky-50/80 text-sky-900 border-r border-slate-200"
+                  rowSpan={2}
+                >
+                  Rata-rata Sumatif ({weights.sumatifWeightPercent}%)
+                  <span className="block text-[10px] font-normal text-sky-700">BAB/TP + SAS</span>
+                </th>
+
+                <th
                   className="px-2.5 py-3 text-center w-24 bg-emerald-50 text-emerald-900 border-r border-slate-200"
                   rowSpan={2}
                 >
-                  Nilai Akhir
+                  Nilai Akhir Rapor
                   <span className="block text-[10px] font-normal text-emerald-700">Skala 0–100</span>
+                </th>
+
+                <th
+                  className="px-3 py-3 min-w-[205px] bg-slate-100/70 text-slate-800 border-r border-slate-200"
+                  rowSpan={2}
+                >
+                  Kelengkapan &amp; Rincian Hitung
+                  <span className="block text-[10px] font-normal text-slate-500">Transparansi Rumus 50:50</span>
                 </th>
 
                 <th
@@ -1550,10 +1755,18 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                 const optIds = item.selectedOptimalTpIds || [];
                 const impIds = item.selectedImprovementTpIds || [];
                 const hasManualFinal = item.manualFinalScore !== undefined;
+                const effectiveSasVal = getEffectiveSasScore(item);
+                const moduleFmtCount = Object.keys(formativeEntriesByStudent[std.id] || {}).length;
+                const displayFormatifAvg =
+                  item.formatifAverage !== undefined
+                    ? item.formatifAverage
+                    : calculateFormativeAverage(item.formatifScores).average;
                 const hasAnyEntered =
                   hasManualFinal ||
+                  displayFormatifAvg !== undefined ||
+                  item.sumatifAverage !== undefined ||
                   Object.keys(item.sumatifMateriScores || {}).length > 0 ||
-                  item.sumatifAkhirSemester > 0 ||
+                  effectiveSasVal !== undefined ||
                   scores.some((ex) => ex.id === item.id);
 
                 const isDirty = Boolean(checklistDirtyIds[std.id]);
@@ -1588,6 +1801,34 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                       </div>
                     </td>
 
+                    {/* Rata-rata Formatif (50%) */}
+                    <td className="px-1.5 py-2 text-center border-r border-slate-100 bg-teal-50/20">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        disabled={isReadOnly}
+                        placeholder="--"
+                        value={displayFormatifAvg === undefined ? '' : displayFormatifAvg}
+                        onChange={(e) => handleScoreChange(std.id, 'formatifAverage', null, e.target.value)}
+                        className={`w-14 px-1 py-1 text-center rounded border font-bold text-xs focus:ring-1 focus:ring-teal-500 disabled:bg-slate-100 ${
+                          displayFormatifAvg === undefined
+                            ? 'border-amber-300 bg-amber-50/40 text-amber-800'
+                            : 'border-teal-300 bg-white text-teal-900'
+                        }`}
+                      />
+                      <div className="mt-0.5 text-[10px] leading-tight">
+                        {moduleFmtCount > 0 && item.formatifScores?.default === undefined ? (
+                          <span className="text-teal-700 font-medium">{moduleFmtCount} nilai harian</span>
+                        ) : item.formatifScores?.default !== undefined ? (
+                          <span className="text-slate-500">Input langsung</span>
+                        ) : (
+                          <span className="text-amber-700 font-medium">Kosong</span>
+                        )}
+                      </div>
+                    </td>
+
                     {relevantTPs.length > 0 &&
                       relevantTPs.map((tp) => {
                         const val = item.sumatifMateriScores?.[tp.id];
@@ -1604,7 +1845,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                                 handleScoreChange(std.id, 'sumatifMateri', tp.id, e.target.value)
                               }
                               className={`w-12 px-1 py-1 text-center rounded border font-semibold text-xs focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 ${
-                                typeof val === 'number' && val < 75
+                                typeof val === 'number' && val < passingCriteria
                                   ? 'border-rose-300 bg-rose-50/40 text-rose-700'
                                   : 'border-slate-300 bg-white'
                               }`}
@@ -1613,6 +1854,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                         );
                       })}
 
+                    {/* Nilai SAS */}
                     <td className="px-1.5 py-2 text-center border-r border-slate-100 bg-indigo-50/20">
                       <input
                         type="number"
@@ -1620,10 +1862,31 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                         max={100}
                         disabled={isReadOnly}
                         placeholder="--"
-                        value={item.sumatifAkhirSemester > 0 ? item.sumatifAkhirSemester : ''}
+                        value={effectiveSasVal === undefined ? '' : effectiveSasVal}
                         onChange={(e) => handleScoreChange(std.id, 'sas', null, e.target.value)}
-                        className="w-12 px-1 py-1 text-center rounded border border-indigo-300 font-bold text-xs text-indigo-900 bg-white focus:ring-1 focus:ring-indigo-500 disabled:bg-slate-100"
+                        className={`w-12 px-1 py-1 text-center rounded border font-bold text-xs focus:ring-1 focus:ring-indigo-500 disabled:bg-slate-100 ${
+                          effectiveSasVal === undefined
+                            ? 'border-amber-300 bg-amber-50/40 text-amber-800'
+                            : 'border-indigo-300 bg-white text-indigo-900'
+                        }`}
                       />
+                      {effectiveSasVal === undefined && (
+                        <div className="mt-0.5 text-[10px] text-amber-700 font-medium">Kosong</div>
+                      )}
+                    </td>
+
+                    {/* Rata-rata Sumatif (50%) */}
+                    <td className="px-2 py-2.5 text-center border-r border-slate-100 bg-sky-50/25">
+                      {item.sumatifAverage !== undefined ? (
+                        <div>
+                          <div className="font-extrabold text-sm text-sky-900 tabular-nums">
+                            {formatScoreDecimal(item.sumatifAverage)}
+                          </div>
+                          <div className="text-[10px] text-sky-700">BAB/TP + SAS</div>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-amber-700">Belum ada</span>
+                      )}
                     </td>
 
                     {/* Editable Nilai Akhir Rapor 0-100 */}
@@ -1637,13 +1900,23 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                         value={hasAnyEntered ? item.finalScore : ''}
                         onChange={(e) => handleDirectFinalScoreChange(std.id, e.target.value)}
                         className={`w-16 px-1.5 py-1 text-center rounded-lg border font-black text-sm focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100 ${
-                          hasAnyEntered && item.finalScore < 75
+                          hasAnyEntered && item.finalScore < passingCriteria
                             ? 'border-rose-300 text-rose-700 bg-rose-50/50'
                             : 'border-emerald-300 text-emerald-800 bg-white'
                         }`}
                       />
                       {hasAnyEntered && (
-                        <div className="mt-1">
+                        <div className="mt-1 space-y-0.5">
+                          {item.rawFinalScore !== undefined &&
+                            item.rawFinalScore !== item.finalScore &&
+                            !hasManualFinal && (
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Desimal: {formatScoreDecimal(item.rawFinalScore)}
+                              </div>
+                            )}
+                          {hasManualFinal && (
+                            <div className="text-[10px] text-amber-700 font-bold">Manual</div>
+                          )}
                           <span
                             className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold ${
                               item.predicate === 'A'
@@ -1657,6 +1930,33 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
                           >
                             Pred. {item.predicate}
                           </span>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Status Kelengkapan & Rincian Hitung */}
+                    <td className="px-2.5 py-2 border-r border-slate-100 text-[11px] space-y-1 bg-slate-50/40">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                            item.completenessStatus === 'LENGKAP' || hasManualFinal
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : 'bg-amber-100 text-amber-800 border-amber-300'
+                          }`}
+                        >
+                          {item.completenessStatus === 'LENGKAP' || hasManualFinal
+                            ? 'Lengkap'
+                            : 'Belum Lengkap'}
+                        </span>
+                      </div>
+                      {item.finalScoreBreakdown && (
+                        <div className="text-slate-700 leading-snug font-medium">
+                          {item.finalScoreBreakdown}
+                        </div>
+                      )}
+                      {item.missingComponentNote && !hasManualFinal && (
+                        <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 leading-snug">
+                          {item.missingComponentNote}
                         </div>
                       )}
                     </td>
@@ -1826,6 +2126,61 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-2.5 rounded-xl bg-teal-50 border border-teal-200">
+                  <div className="text-[10px] font-bold text-teal-700 uppercase">Rata-rata Formatif ({weights.formatifWeightPercent}%)</div>
+                  <div className="text-lg font-black text-teal-900 mt-0.5">
+                    {viewScore.formatifAverage !== undefined ? formatScoreDecimal(viewScore.formatifAverage) : '--'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-sky-50 border border-sky-200">
+                  <div className="text-[10px] font-bold text-sky-700 uppercase">Rata-rata Sumatif ({weights.sumatifWeightPercent}%)</div>
+                  <div className="text-lg font-black text-sky-900 mt-0.5">
+                    {viewScore.sumatifAverage !== undefined ? formatScoreDecimal(viewScore.sumatifAverage) : '--'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                  <div className="text-[10px] font-bold text-indigo-700 uppercase">Nilai SAS</div>
+                  <div className="text-lg font-black text-indigo-900 mt-0.5">
+                    {getEffectiveSasScore(viewScore) !== undefined ? getEffectiveSasScore(viewScore) : '--'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                  <div className="text-[10px] font-bold text-emerald-700 uppercase">Nilai Akhir Rapor</div>
+                  <div className="text-lg font-black text-emerald-900 mt-0.5">
+                    {viewScore.finalScore}
+                    {viewScore.rawFinalScore !== undefined && viewScore.rawFinalScore !== viewScore.finalScore && (
+                      <span className="text-xs font-semibold text-emerald-700 ml-1">
+                        ({formatScoreDecimal(viewScore.rawFinalScore)})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {(viewScore.finalScoreBreakdown || viewScore.missingComponentNote) && (
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">Rincian Perhitungan Nilai Akhir</span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                        viewScore.completenessStatus === 'LENGKAP'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-amber-100 text-amber-800 border-amber-300'
+                      }`}
+                    >
+                      {viewScore.completenessStatus === 'LENGKAP' ? 'Lengkap' : 'Belum Lengkap'}
+                    </span>
+                  </div>
+                  {viewScore.finalScoreBreakdown && (
+                    <div className="text-slate-700 font-medium">{viewScore.finalScoreBreakdown}</div>
+                  )}
+                  {viewScore.missingComponentNote && (
+                    <div className="text-amber-800 text-[11px]">{viewScore.missingComponentNote}</div>
+                  )}
+                </div>
+              )}
+
               <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-1">
                 <div className="font-bold text-emerald-900">
                   1. Deskripsi Capaian Kompetensi Tertinggi

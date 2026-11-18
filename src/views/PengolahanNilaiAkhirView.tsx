@@ -18,7 +18,7 @@ import {
   Curriculum
 } from '../types/erapor';
 import { ReportScoreExcelTab } from '../components/assessment/ReportScoreExcelTab';
-import { resolveSchoolWeights, filterChaptersForContext } from '../utils/assessmentCalculation';
+import { resolveSchoolWeights, filterChaptersForContext, computeStudentReportScore, getEffectiveSasScore } from '../utils/assessmentCalculation';
 import {
   Calculator,
   TrendingUp,
@@ -208,32 +208,34 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         }
       });
 
-      const avgs = Object.values(tpAverages);
-      let finalScore: number | undefined;
+      const weights = resolveSchoolWeights(curricula);
+      const sasVal = getEffectiveSasScore(existing);
+      const calcResult = computeStudentReportScore({
+        chapters: relevantObjectives.map((tp, idx) => ({
+          id: tp.id,
+          code: tp.code || `TP ${idx + 1}`,
+          orderIndex: idx + 1,
+          title: tp.materi || tp.description,
+          subjectId: selectedSubjectId,
+          classId: selectedClassId,
+          gradeLevel: selectedClassroom?.gradeLevel || '7',
+          teacherId: '',
+          academicYear,
+          semester,
+          createdAt: '',
+          updatedAt: ''
+        })) as LearningChapter[],
+        chapterScores: tpAverages,
+        sasScore: sasVal,
+        formatifScores: existing?.formatifScores,
+        manualFinalScore: existing?.manualFinalScore,
+        formatifWeightPercent: weights.formatifWeightPercent,
+        sumatifWeightPercent: weights.sumatifWeightPercent,
+        passingCriteria: subj?.kkm || weights.passingCriteria,
+        legacyMateriScores: tpAverages
+      });
 
-      if (avgs.length > 0) {
-        if (currentConfig.method === 'rata-rata') {
-          finalScore = Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length);
-        } else if (currentConfig.method === 'pembobotan' && currentConfig.tpWeights) {
-          let weightedSum = 0;
-          let totalWeight = 0;
-          relevantObjectives.forEach((tp) => {
-            if (tpAverages[tp.id] !== undefined) {
-              const weight = currentConfig.tpWeights?.[tp.id] || 1;
-              weightedSum += tpAverages[tp.id] * weight;
-              totalWeight += weight;
-            }
-          });
-          finalScore = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : undefined;
-        } else {
-          finalScore = Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length);
-        }
-      } else if (existing && typeof existing.finalScore === 'number' && existing.sumatifAkhirSemester > 0) {
-        finalScore = existing.finalScore;
-      }
-
-      // If SAS exists on score record and method has sasWeight or existing SAS was filled manually
-      const effectiveFinalScore = finalScore ?? existing?.finalScore;
+      const effectiveFinalScore = calcResult.finalScore;
 
       const analysis = analyzeStudentTPAttainment({
         studentId: std.id,
@@ -247,7 +249,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         summativeAssessments,
         existingScore: existing
           ? { ...existing, sumatifMateriScores: { ...existing.sumatifMateriScores, ...tpAverages } }
-          : avgs.length > 0
+          : Object.keys(tpAverages).length > 0
           ? ({ sumatifMateriScores: tpAverages, formatifScores: {} } as AssessmentScore)
           : undefined,
         kktpConfigs,
@@ -271,7 +273,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         student: std,
         existing,
         tpAverages,
-        hasAnyScore: avgs.length > 0 || Boolean(existing),
+        hasAnyScore: Object.keys(tpAverages).length > 0 || Boolean(existing),
         finalScore: effectiveFinalScore,
         analysis,
         composed,
