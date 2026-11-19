@@ -1,13 +1,23 @@
 import React, { useState } from 'react';
-import { Classroom, Subject, Student, AssessmentScore, SchoolProfile, TeachingAssignment, User } from '../types/erapor';
-import { Files, Download, Printer, Award, FileSpreadsheet, Lock } from 'lucide-react';
+import {
+  Classroom,
+  Subject,
+  Student,
+  AssessmentScore,
+  SchoolProfile,
+  TeachingAssignment,
+  Teacher,
+  User
+} from '../types/erapor';
+import { Files, Download, Printer, UserCheck, Loader2 } from 'lucide-react';
 import { exportLegerToExcel } from '../services/excelService';
 import { generateLegerPDF } from '../services/pdfService';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
+import { sortStudentsAlphabetically } from '../utils/studentSort';
 import {
   getSubjectsForClassPeriod,
-  hasEnteredAssessmentScore,
+  hasEnteredNumericScore,
   normalizeAcademicYearValue,
   normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
@@ -18,6 +28,7 @@ interface LegerNilaiViewProps {
   subjects: Subject[];
   students: Student[];
   scores: AssessmentScore[];
+  teachers?: Teacher[];
   teachingAssignments?: TeachingAssignment[];
   academicYear: string;
   semester: 'Ganjil' | 'Genap';
@@ -30,6 +41,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   subjects,
   students,
   scores,
+  teachers = [],
   teachingAssignments = [],
   academicYear,
   semester,
@@ -41,6 +53,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   const [selectedClass, setSelectedClass] = useState<string>(
     isWaliKelas && currentUser.classId ? currentUser.classId : classrooms[0]?.id || 'cls-vii-1'
   );
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // Security check: if Wali Kelas attempts to access another class
   const isUnauthorized = isWaliKelas && currentUser.classId && selectedClass !== currentUser.classId;
@@ -63,7 +76,12 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
     : sortedAllClassrooms;
 
   const classroom = classrooms.find((c) => c.id === selectedClass) || classrooms[0];
-  const classStudents = students.filter((s) => s.classId === selectedClass);
+  const homeroomTeacher =
+    teachers.find((t) => t.id === classroom?.homeroomTeacherId) ||
+    teachers.find((t) => t.isHomeroom && t.homeroomClassId === classroom?.id);
+  const classStudents = sortStudentsAlphabetically(
+    students.filter((s) => s.classId === selectedClass && s.status === 'Aktif')
+  );
   const sortedSubjects = getSubjectsForClassPeriod({
     subjects,
     classId: selectedClass,
@@ -84,8 +102,7 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
       (sc.classId === selectedClass || classStudentIdSet.has(sc.studentId)) &&
       normalizeSemesterValue(sc.semester) === normSem &&
       normalizeAcademicYearValue(sc.academicYear) === normYear &&
-      (hasEnteredAssessmentScore(sc) ||
-        (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0))
+      hasEnteredNumericScore(sc)
     ) {
       const resolvedVal = sc.manualFinalScore ?? sc.finalScore;
       if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
@@ -127,15 +144,34 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
   });
 
   const handleExportExcel = () => {
-    exportLegerToExcel(classroom, classStudents, sortedSubjects, scores, academicYear, semester);
+    exportLegerToExcel(
+      classroom,
+      classStudents,
+      sortedSubjects,
+      scores,
+      academicYear,
+      semester,
+      homeroomTeacher,
+      school?.name
+    );
   };
 
-  const handleExportPDF = () => {
-    generateLegerPDF(classroom, classStudents, sortedSubjects, scores, school, academicYear, semester);
-  };
-
-  const handlePrint = () => {
-    window.print();
+  const handleExportPDF = async () => {
+    setIsExportingPdf(true);
+    try {
+      await generateLegerPDF(
+        classroom,
+        classStudents,
+        sortedSubjects,
+        scores,
+        school,
+        academicYear,
+        semester,
+        homeroomTeacher
+      );
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   return (
@@ -162,10 +198,15 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
 
           <button
             onClick={handleExportPDF}
-            className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
+            disabled={isExportingPdf}
+            className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition"
           >
-            <Printer className="w-4 h-4" />
-            Unduh Leger PDF
+            {isExportingPdf ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Printer className="w-4 h-4" />
+            )}
+            {isExportingPdf ? 'Menyiapkan PDF...' : 'Unduh Leger PDF'}
           </button>
         </div>
       </div>
@@ -185,8 +226,14 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
           </select>
         </div>
 
-        <div className="text-xs font-medium text-slate-600">
-          SMP Negeri 1 Rangsang &bull; TP {academicYear} Semester {semester}
+        <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-slate-600">
+          <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-lg font-semibold">
+            <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+            Wali Kelas: <strong>{homeroomTeacher?.name || '-'}</strong>
+          </span>
+          <span>
+            {school?.name || 'SMP Negeri 1 Rangsang'} &bull; TP {academicYear} Semester {semester}
+          </span>
         </div>
       </div>
 

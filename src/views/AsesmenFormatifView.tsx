@@ -27,7 +27,11 @@ import { getAvailableAcademicYears } from '../utils/academicYear';
 import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
 import { filterObjectivesForContext } from '../utils/tpAnalysisAndDescription';
 import { buildDeterministicScoreId } from '../utils/assessmentCalculation';
-import { normalizeAcademicYearValue, normalizeSemesterValue } from '../utils/electiveSubjectHelper';
+import {
+  isStudentParticipatingInSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 import {
   authorizeSubjectAssessmentWrite,
   getAuthorizedSubjectClassIds
@@ -176,8 +180,29 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
   const classStudents = useMemo(() => {
     if (!selectedClassId) return [];
     const list = students.filter((s) => s.classId === selectedClassId && s.status === 'Aktif');
-    return sortStudentsAlphabetically(list);
-  }, [students, selectedClassId]);
+    const participating = selectedSubject
+      ? list.filter((st) =>
+          isStudentParticipatingInSubject({
+            studentId: st.id,
+            subject: selectedSubject,
+            classId: selectedClassId,
+            academicYear: selectedYear,
+            semester: selectedSemester,
+            teachingAssignments,
+            scores
+          })
+        )
+      : list;
+    return sortStudentsAlphabetically(participating);
+  }, [
+    students,
+    selectedClassId,
+    selectedSubject,
+    selectedYear,
+    selectedSemester,
+    teachingAssignments,
+    scores
+  ]);
 
   const contextObjectives = useMemo(() => {
     if (!selectedSubjectId || !selectedClassroom) return [];
@@ -301,7 +326,10 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
       const targetYear = normalizeAcademicYearValue(selectedYear);
       const targetSem = normalizeSemesterValue(selectedSemester);
 
-      const scoresToSave: AssessmentScore[] = classStudents.map((std) => {
+      const scoresToSave: AssessmentScore[] = [];
+      let skippedLockedCount = 0;
+
+      classStudents.forEach((std) => {
         const existing = scores.find(
           (sc) =>
             sc.studentId === std.id &&
@@ -309,6 +337,11 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
             normalizeAcademicYearValue(sc.academicYear) === targetYear &&
             normalizeSemesterValue(sc.semester) === targetSem
         );
+
+        if (existing?.status === 'TERKUNCI') {
+          skippedLockedCount++;
+          return;
+        }
 
         const studentKktp: Record<string, number> = { ...(existing?.formatifKktpScores || {}) };
         const studentShow: Record<string, number> = { ...(existing?.formatifShowScores || {}) };
@@ -323,7 +356,7 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
 
         const id = existing?.id || buildDeterministicScoreId(std.id, selectedSubjectId, selectedYear, selectedSemester);
 
-        return {
+        scoresToSave.push({
           ...(existing || {}),
           id,
           studentId: std.id,
@@ -353,13 +386,24 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
           updatedAt: new Date().toISOString(),
           updatedBy: currentUser.name,
           updatedById: currentUser.id
-        } as AssessmentScore;
+        } as AssessmentScore);
       });
+
+      if (scoresToSave.length === 0) {
+        setFeedbackBanner({
+          type: 'warning',
+          text:
+            skippedLockedCount > 0
+              ? `Semua nilai siswa (${skippedLockedCount}) berstatus TERKUNCI dan dilindungi.`
+              : 'Tidak ada data asesmen formatif yang dapat disimpan.'
+        });
+        return;
+      }
 
       onSaveScores(scoresToSave, {
         id: `notif-${Date.now()}`,
         title: 'Asesmen Formatif Disimpan',
-        message: `Nilai formatif KKTP & Tampil untuk ${classStudents.length} siswa berhasil disimpan.`,
+        message: `Nilai formatif KKTP & Tampil untuk ${scoresToSave.length} siswa berhasil disimpan.`,
         createdAt: new Date().toISOString(),
         classId: selectedClassId,
         subjectId: selectedSubjectId,
@@ -367,8 +411,10 @@ export const AsesmenFormatifView: React.FC<AsesmenFormatifViewProps> = ({
       });
 
       setFeedbackBanner({
-        type: 'success',
-        text: `Berhasil menyimpan asesmen formatif untuk ${classStudents.length} siswa.`
+        type: skippedLockedCount > 0 ? 'warning' : 'success',
+        text: `Berhasil menyimpan asesmen formatif untuk ${scoresToSave.length} siswa.${
+          skippedLockedCount > 0 ? ` (${skippedLockedCount} siswa terkunci dilewati).` : ''
+        }`
       });
     } catch (err: any) {
       setFeedbackBanner({

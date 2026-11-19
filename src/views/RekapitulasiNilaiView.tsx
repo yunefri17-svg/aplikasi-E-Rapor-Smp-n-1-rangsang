@@ -3,7 +3,13 @@ import { Classroom, Subject, Student, AssessmentScore, TeachingAssignment, User 
 import { Table, CheckCircle2, AlertTriangle, FileSpreadsheet, Download, Printer, Lock } from 'lucide-react';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
-import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
+import { sortStudentsAlphabetically } from '../utils/studentSort';
+import {
+  getSubjectsForClassPeriod,
+  hasEnteredNumericScore,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 interface RekapitulasiNilaiViewProps {
   classrooms: Classroom[];
@@ -53,7 +59,10 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
     ? sortedAllClassrooms.filter((c) => c.id === currentUser.classId)
     : sortedAllClassrooms;
 
-  const classStudents = students.filter((s) => s.classId === selectedClass);
+  const classStudents = sortStudentsAlphabetically(
+    students.filter((s) => s.classId === selectedClass && s.status === 'Aktif')
+  );
+  const classStudentIdSet = new Set(classStudents.map((s) => s.id));
   const sortedSubjects = getSubjectsForClassPeriod({
     subjects,
     classId: selectedClass,
@@ -63,8 +72,13 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
     scores,
     classStudentIds: classStudents.map((s) => s.id)
   });
+  const normYear = normalizeAcademicYearValue(academicYear);
+  const normSem = normalizeSemesterValue(semester);
   const classScores = scores.filter(
-    (sc) => sc.classId === selectedClass && sc.academicYear === academicYear && sc.semester === semester
+    (sc) =>
+      (sc.classId === selectedClass || classStudentIdSet.has(sc.studentId)) &&
+      normalizeAcademicYearValue(sc.academicYear) === normYear &&
+      normalizeSemesterValue(sc.semester) === normSem
   );
 
   // Map studentId -> subjectId -> AssessmentScore
@@ -141,10 +155,13 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
 
                 sortedSubjects.forEach((s) => {
                   const sc = stdMap.get(s.id);
-                  if (sc && typeof sc.finalScore === 'number') {
-                    sum += sc.finalScore;
-                    count++;
-                    if (sc.finalScore < s.kkm) hasRemedial = true;
+                  if (hasEnteredNumericScore(sc)) {
+                    const resolvedVal = sc!.manualFinalScore ?? sc!.finalScore;
+                    if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
+                      sum += resolvedVal;
+                      count++;
+                      if (resolvedVal < s.kkm) hasRemedial = true;
+                    }
                   }
                 });
 
@@ -163,7 +180,9 @@ export const RekapitulasiNilaiView: React.FC<RekapitulasiNilaiViewProps> = ({
                     </td>
                     {sortedSubjects.map((s) => {
                       const sc = stdMap.get(s.id);
-                      const val = sc?.finalScore;
+                      const val = hasEnteredNumericScore(sc)
+                        ? sc?.manualFinalScore ?? sc?.finalScore
+                        : undefined;
                       return (
                         <td
                           key={s.id}

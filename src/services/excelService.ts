@@ -21,7 +21,7 @@ import {
 } from '../utils/kokurikulerHelper';
 import { normalizeDateToIso } from '../utils/dateFormat';
 import {
-  hasEnteredAssessmentScore,
+  hasEnteredNumericScore,
   normalizeAcademicYearValue,
   normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
@@ -219,7 +219,9 @@ export const exportLegerToExcel = (
   subjects: Subject[],
   scores: AssessmentScore[],
   academicYear: string,
-  semester: string
+  semester: string,
+  homeroomTeacher?: Teacher,
+  schoolName: string = 'SMP Negeri 1 Rangsang'
 ) => {
   // Build a 2D lookup: studentId -> subjectId -> finalScore (aligned with Cetak Rapor)
   const normYear = normalizeAcademicYearValue(academicYear);
@@ -231,8 +233,7 @@ export const exportLegerToExcel = (
       (sc.classId === classroom.id || classStudentIdSet.has(sc.studentId)) &&
       normalizeSemesterValue(sc.semester) === normSem &&
       normalizeAcademicYearValue(sc.academicYear) === normYear &&
-      (hasEnteredAssessmentScore(sc) ||
-        (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0))
+      hasEnteredNumericScore(sc)
     ) {
       const resolvedVal = sc.manualFinalScore ?? sc.finalScore;
       if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
@@ -252,31 +253,28 @@ export const exportLegerToExcel = (
     let totalScore = 0;
     let gradedCount = 0;
 
-    const rowObj: Record<string, any> = {
-      NO: idx + 1,
-      NIS: std.nis,
-      NISN: std.nisn,
-      NAMA_SISWA: std.name,
-      JK: std.gender
-    };
-
-    sortedSubjects.forEach((sb) => {
-      const score = sMap.get(sb.id) ?? '-';
-      rowObj[sb.code] = score;
+    const subjectCells = sortedSubjects.map((sb) => {
+      const score = sMap.get(sb.id);
       if (typeof score === 'number') {
         totalScore += score;
         gradedCount += 1;
+        return score;
       }
+      return '-';
     });
 
     const average = gradedCount > 0 ? Number((totalScore / gradedCount).toFixed(1)) : 0;
-    rowObj['JUMLAH_NILAI'] = totalScore;
-    rowObj['RATA_RATA'] = average;
 
     return {
-      rowObj,
+      no: idx + 1,
+      nis: std.nis || '-',
+      nisn: std.nisn || '-',
+      name: std.name,
+      gender: std.gender,
+      subjectCells,
       totalScore,
-      average
+      average,
+      gradedCount
     };
   });
 
@@ -287,12 +285,67 @@ export const exportLegerToExcel = (
     rankMap.set(item, rIdx + 1);
   });
 
-  const finalRows = studentRows.map((item) => {
-    const finalObj = { ...item.rowObj, PERINGKAT: rankMap.get(item) || 1 };
-    return finalObj;
+  const headerRow = [
+    'NO',
+    'NIS',
+    'NISN',
+    'NAMA SISWA',
+    'JK',
+    ...sortedSubjects.map((s) => s.code),
+    'JUMLAH NILAI',
+    'RATA-RATA',
+    'PERINGKAT'
+  ];
+
+  const waliLabel = homeroomTeacher?.name
+    ? `${homeroomTeacher.name}${homeroomTeacher.nip ? ` (NIP. ${homeroomTeacher.nip})` : ''}`
+    : '-';
+
+  const aoa: any[][] = [
+    [`LEGER NILAI HASIL BELAJAR PESERTA DIDIK — ${schoolName.toUpperCase()}`],
+    [`Kelas: ${classroom.name} | Tahun Pelajaran: ${academicYear} | Semester: ${semester}`],
+    [`Wali Kelas: ${waliLabel}`],
+    [],
+    headerRow
+  ];
+
+  studentRows.forEach((item) => {
+    aoa.push([
+      item.no,
+      item.nis,
+      item.nisn,
+      item.name,
+      item.gender,
+      ...item.subjectCells,
+      item.gradedCount > 0 ? item.totalScore : '-',
+      item.gradedCount > 0 ? item.average : '-',
+      rankMap.get(item) || 1
+    ]);
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(finalRows);
+  aoa.push([]);
+  aoa.push(['', '', '', `Wali Kelas ${classroom.name}:`, waliLabel]);
+
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+  worksheet['!cols'] = [
+    { wch: 5 },
+    { wch: 11 },
+    { wch: 14 },
+    { wch: 30 },
+    { wch: 5 },
+    ...sortedSubjects.map(() => ({ wch: 8 })),
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 11 }
+  ];
+
+  const lastColIdx = headerRow.length - 1;
+  worksheet['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: lastColIdx } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: lastColIdx } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: lastColIdx } }
+  ];
+
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, `Leger_${classroom.name.replace(/\s+/g, '_')}`);
 

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { AppDatabase } from '../services/storage';
+import { AppDatabase, calculatePredicate } from '../services/storage';
 import {
   User,
   AssessmentScore,
@@ -11,7 +11,14 @@ import {
 } from '../types/erapor';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
-import { getSubjectsForClassPeriod, hasEnteredAssessmentScore } from '../utils/electiveSubjectHelper';
+import {
+  getSubjectsForClassPeriod,
+  hasEnteredAssessmentScore,
+  hasEnteredNumericScore,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
+import { buildDeterministicScoreId } from '../utils/assessmentCalculation';
 import {
   Table,
   CheckCircle2,
@@ -97,11 +104,13 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
         db.teachers.find((t: Teacher) => t.subjectsTaught.includes(sub.id));
 
       // Find scores for this subject & class in current academic year & semester
+      const normYear = normalizeAcademicYearValue(db.schoolProfile.activeAcademicYear);
+      const normSem = normalizeSemesterValue(db.schoolProfile.activeSemester);
       const subjectScores = db.scores.filter(
         (s: AssessmentScore) =>
           s.subjectId === sub.id &&
-          s.academicYear === db.schoolProfile.activeAcademicYear &&
-          s.semester === db.schoolProfile.activeSemester &&
+          normalizeAcademicYearValue(s.academicYear) === normYear &&
+          normalizeSemesterValue(s.semester) === normSem &&
           classStudents.some((st: Student) => st.id === s.studentId)
       );
 
@@ -124,8 +133,11 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
         status = 'SELESAI';
       }
 
-      // Calculate average score if scores exist
-      const validScores = enteredScores.map((s: AssessmentScore) => s.manualFinalScore ?? s.finalScore).filter((v: number) => typeof v === 'number' && Number.isFinite(v));
+      // Calculate average score only from scores with an actual numeric grade
+      const validScores = subjectScores
+        .filter((s: AssessmentScore) => hasEnteredNumericScore(s))
+        .map((s: AssessmentScore) => s.manualFinalScore ?? s.finalScore)
+        .filter((v: number) => typeof v === 'number' && Number.isFinite(v));
       const average = validScores.length > 0
         ? Math.round(validScores.reduce((acc: number, curr: number) => acc + curr, 0) / validScores.length)
         : 0;
@@ -187,19 +199,27 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
     const targetSummary = subjectSummaries.find((s) => s.subject.id === revisionSubject.id);
     const teacherId = targetSummary?.teacher?.id;
 
-    // Map existing scores or create score entries with REVISI status
+    // Map existing scores or create score entries with REVISI status without wiping existing assessment fields
     const updatedScores: AssessmentScore[] = classStudents.map((st) => {
       const existing = targetSummary?.scores.find((s) => s.studentId === st.id);
       return {
-        id: existing?.id || `sc-26-${st.id}-${revisionSubject.id}`,
+        ...(existing || {}),
+        id:
+          existing?.id ||
+          buildDeterministicScoreId(
+            st.id,
+            revisionSubject.id,
+            db.schoolProfile.activeAcademicYear,
+            db.schoolProfile.activeSemester
+          ),
         studentId: st.id,
         studentName: st.name,
         subjectId: revisionSubject.id,
         subjectName: revisionSubject.name,
         classId: selectedClassroom.id,
         className: selectedClassroom.name,
-        teacherId: teacherId || '',
-        teacherName: targetSummary?.teacher?.name || '',
+        teacherId: teacherId || existing?.teacherId || '',
+        teacherName: targetSummary?.teacher?.name || existing?.teacherName || '',
         academicYear: db.schoolProfile.activeAcademicYear,
         semester: db.schoolProfile.activeSemester,
         formatifScores: existing?.formatifScores || {},
@@ -587,23 +607,28 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {classStudents.map((st: Student, idx: number) => {
+                      const normYear = normalizeAcademicYearValue(db.schoolProfile.activeAcademicYear);
+                      const normSem = normalizeSemesterValue(db.schoolProfile.activeSemester);
                       const scoreObj = db.scores.find(
                         (s: AssessmentScore) =>
                           s.studentId === st.id &&
                           s.subjectId === detailSubject.id &&
-                          s.academicYear === db.schoolProfile.activeAcademicYear &&
-                          s.semester === db.schoolProfile.activeSemester
+                          normalizeAcademicYearValue(s.academicYear) === normYear &&
+                          normalizeSemesterValue(s.semester) === normSem
                       );
 
-                      const hasEntered = hasEnteredAssessmentScore(scoreObj);
-                      const finalVal = scoreObj?.manualFinalScore ?? scoreObj?.finalScore;
+                      const hasNumeric = hasEnteredNumericScore(scoreObj);
+                      const finalVal = hasNumeric
+                        ? scoreObj?.manualFinalScore ?? scoreObj?.finalScore
+                        : undefined;
                       let predikat = '-';
                       let predikatColor = 'text-slate-400';
-                      if (hasEntered && finalVal !== undefined) {
-                        if (finalVal >= 90) { predikat = 'A'; predikatColor = 'text-emerald-700 font-bold'; }
-                        else if (finalVal >= 80) { predikat = 'B'; predikatColor = 'text-blue-700 font-bold'; }
-                        else if (finalVal >= 70) { predikat = 'C'; predikatColor = 'text-amber-700 font-bold'; }
-                        else { predikat = 'D'; predikatColor = 'text-red-700 font-bold'; }
+                      if (hasNumeric && finalVal !== undefined) {
+                        predikat = calculatePredicate(finalVal, detailSubject.kkm || 75);
+                        if (predikat === 'A') predikatColor = 'text-emerald-700 font-bold';
+                        else if (predikat === 'B') predikatColor = 'text-blue-700 font-bold';
+                        else if (predikat === 'C') predikatColor = 'text-amber-700 font-bold';
+                        else predikatColor = 'text-red-700 font-bold';
                       }
 
                       return (
@@ -612,7 +637,7 @@ export const RekapNilaiMapelView: React.FC<RekapNilaiMapelViewProps> = ({
                           <td className="p-3 text-xs font-mono">{st.nisn} / {st.nis}</td>
                           <td className="p-3 font-semibold text-slate-800">{st.name}</td>
                           <td className="p-3 text-center font-bold">
-                            {hasEntered && finalVal !== undefined ? (
+                            {hasNumeric && finalVal !== undefined ? (
                               <span className="bg-slate-100 px-2.5 py-1 rounded text-slate-800">
                                 {finalVal}
                               </span>

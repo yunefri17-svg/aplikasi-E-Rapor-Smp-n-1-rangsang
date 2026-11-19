@@ -60,9 +60,14 @@ import {
   normalizeAssessmentPolicy
 } from '../utils/tpAnalysisAndDescription';
 import {
+  hasEnteredNumericScore,
   isElectiveSubject,
-  isStudentParticipatingInSubject
+  isStudentParticipatingInSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
+import { resolveTeacherForUser } from '../utils/teacherAssignmentHelper';
+import { buildDeterministicScoreId } from '../utils/assessmentCalculation';
 
 interface DeskripsiNilaiViewProps {
   classrooms: Classroom[];
@@ -119,16 +124,10 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
     currentUser.role !== 'admin' && isPeriodInputLocked(assessmentPolicy, academicYear, semester);
   const isReadOnly = isWaliKelas || isPeriodLocked;
 
-  const currentTeacher = useMemo(() => {
-    return teachers.find(
-      (t) =>
-        (currentUser.teacherId && t.id === currentUser.teacherId) ||
-        (currentUser.nip && t.nip === currentUser.nip) ||
-        (t.name.toLowerCase().includes('fauzi') && currentUser.name.toLowerCase().includes('fauzi')) ||
-        (t.name.toLowerCase().includes('nikmatul') && currentUser.name.toLowerCase().includes('nikmatul')) ||
-        t.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim()
-    );
-  }, [teachers, currentUser]);
+  const currentTeacher = useMemo(
+    () => resolveTeacherForUser(currentUser, teachers),
+    [teachers, currentUser]
+  );
 
   const visibleSubjects = useMemo(() => {
     const sorted = sortSubjects(subjects);
@@ -268,23 +267,27 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
 
   const matchingElectiveAssignments = useMemo(() => {
     if (!isElectiveActiveSubject) return [];
+    const normYear = normalizeAcademicYearValue(academicYear);
+    const normSem = normalizeSemesterValue(semester);
     return teachingAssignments.filter(
       (ta) =>
         ta.subjectId === selectedSubject &&
         ta.classId === selectedClass &&
         ta.status !== 'inactive' &&
-        (!ta.academicYear || ta.academicYear === academicYear) &&
-        (!ta.semester || ta.semester === 'Semua' || ta.semester === semester)
+        (!ta.academicYear || normalizeAcademicYearValue(ta.academicYear) === normYear) &&
+        (!ta.semester || ta.semester === 'Semua' || normalizeSemesterValue(ta.semester) === normSem)
     );
   }, [isElectiveActiveSubject, teachingAssignments, selectedSubject, selectedClass, academicYear, semester]);
 
   const rawClassStudentsCount = useMemo(
-    () => students.filter((s) => s.classId === selectedClass).length,
+    () => students.filter((s) => s.classId === selectedClass && s.status === 'Aktif').length,
     [students, selectedClass]
   );
 
   const classStudents = useMemo(() => {
-    const sorted = sortStudentsAlphabetically(students.filter((s) => s.classId === selectedClass));
+    const sorted = sortStudentsAlphabetically(
+      students.filter((s) => s.classId === selectedClass && s.status === 'Aktif')
+    );
     if (!isElectiveActiveSubject || !currentSubjectObj || matchingElectiveAssignments.length === 0) {
       return sorted;
     }
@@ -325,14 +328,16 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
   // Per-student formative/summative attainment analysis (supporting evidence & suggestions only)
   const analysisByStudent = useMemo(() => {
     const map: Record<string, StudentTPAttainmentResult> = {};
+    const normYear = normalizeAcademicYearValue(academicYear);
+    const normSem = normalizeSemesterValue(semester);
     classStudents.forEach((std) => {
       const existing = scores.find(
         (sc) =>
           sc.studentId === std.id &&
           sc.subjectId === selectedSubject &&
           (sc.classId === selectedClass || !sc.classId) &&
-          sc.academicYear === academicYear &&
-          sc.semester === semester
+          normalizeAcademicYearValue(sc.academicYear) === normYear &&
+          normalizeSemesterValue(sc.semester) === normSem
       );
       map[std.id] = analyzeStudentTPAttainment({
         studentId: std.id,
@@ -372,14 +377,16 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
     const validTpSet = new Set(relevantTPs.map((t) => t.id));
     const map: Record<string, AssessmentScore> = {};
 
+    const normYear = normalizeAcademicYearValue(academicYear);
+    const normSem = normalizeSemesterValue(semester);
     classStudents.forEach((std) => {
       const existing = scores.find(
         (sc) =>
           sc.studentId === std.id &&
           sc.subjectId === selectedSubject &&
           (sc.classId === selectedClass || !sc.classId) &&
-          ((sc.academicYear || '').replace(/\//g, '_') === sanitizedYear || sc.academicYear === academicYear) &&
-          sc.semester === semester
+          normalizeAcademicYearValue(sc.academicYear) === normYear &&
+          normalizeSemesterValue(sc.semester) === normSem
       );
       const analysis = analysisByStudent[std.id];
 
@@ -412,7 +419,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
         };
       } else {
         map[std.id] = {
-          id: `sc-${std.id}-${selectedSubject}-${sanitizedYear}-${semester}`,
+          id: buildDeterministicScoreId(std.id, selectedSubject, academicYear, semester),
           studentId: std.id,
           studentName: std.name,
           subjectId: selectedSubject,
@@ -491,7 +498,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
         ...cur,
         manualFinalScore: clamped,
         finalScore: clamped,
-        predicate: calculatePredicate(clamped, 75),
+        predicate: calculatePredicate(clamped, currentSubjectObj?.kkm || 75),
         updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
         updatedBy: currentUser.name,
         updatedById: currentUser.id
@@ -769,10 +776,9 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
         (cur.selectedOptimalTpIds?.length || 0) > 0 ||
         (cur.selectedImprovementTpIds?.length || 0) > 0;
       const hasScoreOrRecord =
-        cur.manualFinalScore !== undefined ||
+        hasEnteredNumericScore(cur) ||
         scores.some((s) => s.id === cur.id) ||
-        Object.keys(cur.sumatifMateriScores || {}).length > 0 ||
-        cur.sumatifAkhirSemester > 0 ||
+        Object.keys(cur.formatifKktpScores || {}).length > 0 ||
         Boolean((cur.finalDescription || cur.highestCompetenceDesc || '').trim());
 
       if (!hasScoreOrRecord && !hasChecked) return;
@@ -1315,11 +1321,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
                   const optIds = item.selectedOptimalTpIds || [];
                   const impIds = item.selectedImprovementTpIds || [];
 
-                  const hasStoredScore =
-                    item.manualFinalScore !== undefined ||
-                    scores.some((s) => s.id === item.id) ||
-                    Object.keys(item.sumatifMateriScores || {}).length > 0 ||
-                    item.sumatifAkhirSemester > 0;
+                  const hasStoredScore = hasEnteredNumericScore(item);
 
                   const previewHigh = (item.highestCompetenceDesc || '').trim();
                   const previewLow = (item.lowestCompetenceDesc || '').trim();
@@ -1367,7 +1369,7 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
                           value={hasStoredScore ? item.finalScore : ''}
                           onChange={(e) => handleFinalScoreChange(std.id, e.target.value)}
                           className={`w-16 px-1.5 py-1 text-center rounded-lg border font-black text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 ${
-                            hasStoredScore && item.finalScore < 75
+                            hasStoredScore && item.finalScore < (currentSubjectObj?.kkm || 75)
                               ? 'border-rose-300 text-rose-700 bg-rose-50/50'
                               : 'border-emerald-300 text-blue-800 bg-white'
                           }`}
@@ -1533,7 +1535,10 @@ export const DeskripsiNilaiView: React.FC<DeskripsiNilaiViewProps> = ({
               <div>
                 <h2 className="font-bold text-sm sm:text-base">{detailStudent.name}</h2>
                 <p className="text-[11px] text-slate-300">
-                  {currentSubjectObj?.name} • {currentClass?.name} • Nilai Akhir: {detailScore.finalScore} (Predikat {detailScore.predicate})
+                  {currentSubjectObj?.name} • {currentClass?.name} • Nilai Akhir:{' '}
+                  {hasEnteredNumericScore(detailScore)
+                    ? `${detailScore.manualFinalScore ?? detailScore.finalScore} (Predikat ${detailScore.predicate})`
+                    : 'Belum diisi'}
                 </p>
               </div>
               <button

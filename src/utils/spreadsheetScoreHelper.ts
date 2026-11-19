@@ -232,12 +232,21 @@ export function extractStudentInitialEditState(params: {
       const matchedDirect = studentSummatives.filter(
         (sa) => sa.chapterId === col.id && !sa.planId
       );
-      if (matchedDirect.length > 0) {
+      const fromScore =
+        existingScore?.chapterScores?.[col.id] ?? existingScore?.sumatifMateriScores?.[col.id];
+      const latestDirectTs = matchedDirect.reduce((maxTs, sa) => {
+        const ts = String(sa.updatedAt || sa.date || '');
+        return ts > maxTs ? ts : maxTs;
+      }, '');
+      const existingUpdatedAt = String(existingScore?.updatedAt || '');
+
+      if (existingUpdatedAt && matchedDirect.length > 0 && existingUpdatedAt > latestDirectTs) {
+        cellValues[col.key] =
+          typeof fromScore === 'number' && Number.isFinite(fromScore) ? String(fromScore) : '';
+      } else if (matchedDirect.length > 0) {
         const avg = matchedDirect.reduce((sum, sa) => sum + sa.score, 0) / matchedDirect.length;
         cellValues[col.key] = String(Math.round(clampScore0To100(avg) * 100) / 100);
       } else {
-        const fromScore =
-          existingScore?.chapterScores?.[col.id] ?? existingScore?.sumatifMateriScores?.[col.id];
         cellValues[col.key] =
           typeof fromScore === 'number' && Number.isFinite(fromScore) ? String(fromScore) : '';
       }
@@ -345,7 +354,7 @@ export function computeSpreadsheetRowSummary(params: {
     babWeightPercent: weights.babWeightPercent,
     sasWeightPercent: weights.sasWeightPercent,
     passingCriteria,
-    legacyMateriScores: existingScore?.sumatifMateriScores
+    legacyMateriScores: chapters.length > 0 ? undefined : existingScore?.sumatifMateriScores
   });
 
   const legacyCheck = checkLegacyScoreProtection({
@@ -519,6 +528,9 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
     const stableId =
       existing?.id || buildDeterministicScoreId(std.id, subject.id, academicYear, semester);
 
+    const prevSasScore = getEffectiveSasScore(existing);
+    const sasModifiedOrCleared = row.sasScore !== prevSasScore;
+
     scoresToSave.push({
       ...(existing || {}),
       id: stableId,
@@ -542,6 +554,9 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
       },
       sumatifAkhirSemester: row.sasScore ?? 0,
       hasSasScore: row.sasScore !== undefined,
+      sasNonTes: sasModifiedOrCleared ? undefined : existing?.sasNonTes,
+      sasTes: sasModifiedOrCleared ? row.sasScore : existing?.sasTes,
+      naSas: row.sasScore,
       babAverage: row.babAverage,
       babWeightPercent: weights.babWeightPercent,
       sasWeightPercent: weights.sasWeightPercent,

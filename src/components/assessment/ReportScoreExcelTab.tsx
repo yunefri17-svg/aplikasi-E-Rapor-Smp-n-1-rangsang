@@ -24,7 +24,14 @@ import {
   parseAndValidateReportScoreExcel,
   downloadReportScoreExcelTemplate
 } from '../../services/assessmentExcelService';
-import { ResolvedSchoolWeights } from '../../utils/assessmentCalculation';
+import {
+  buildDeterministicChapterSummativeId,
+  buildDeterministicScoreId,
+  computeStudentReportScore,
+  getEffectiveSasScore,
+  ResolvedSchoolWeights
+} from '../../utils/assessmentCalculation';
+import { normalizeAcademicYearValue, normalizeSemesterValue } from '../../utils/electiveSubjectHelper';
 
 interface ReportScoreExcelTabProps {
   schoolName: string;
@@ -113,7 +120,9 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
     const scoresToSave: AssessmentScore[] = [];
     const summativesToSave: SummativeAssessment[] = [];
     const nowIso = new Date().toISOString();
-    const sanitizedYear = academicYear.replace(/\//g, '_');
+    const targetYear = normalizeAcademicYearValue(academicYear);
+    const targetSem = normalizeSemesterValue(semester);
+    let skippedLockedCount = 0;
 
     parseResult.validRows.forEach((row) => {
       if (!row.studentId) return;
@@ -124,13 +133,31 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
         (sc) =>
           sc.studentId === std.id &&
           sc.subjectId === subject.id &&
-          sc.academicYear === academicYear &&
-          sc.semester === semester
+          normalizeAcademicYearValue(sc.academicYear) === targetYear &&
+          normalizeSemesterValue(sc.semester) === targetSem
       );
 
-      // Build updated AssessmentScore
+      if (existing?.status === 'TERKUNCI') {
+        skippedLockedCount++;
+        return;
+      }
+
+      const calc = computeStudentReportScore({
+        chapters,
+        chapterScores: row.chapterScores,
+        sasScore: row.sasScore,
+        formatifScores: existing?.formatifScores,
+        passingCriteria: subject.kkm || weights.passingCriteria
+      });
+
+      const prevSas = getEffectiveSasScore(existing);
+      const sasChanged = row.sasScore !== prevSas;
+      const resolvedFinal = calc.finalScore ?? existing?.finalScore ?? 0;
+
+      // Build updated AssessmentScore preserving existing Formatif KKTP/Show & descriptions
       const updatedScore: AssessmentScore = {
-        id: existing?.id || `sc-${std.id}-${subject.id}-${sanitizedYear}-${semester}`,
+        ...(existing || {}),
+        id: existing?.id || buildDeterministicScoreId(std.id, subject.id, academicYear, semester),
         studentId: std.id,
         studentName: std.name,
         subjectId: subject.id,
@@ -140,19 +167,34 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
         academicYear,
         semester,
         formatifScores: existing?.formatifScores || {},
-        chapterScores: row.chapterScores,
-        sumatifMateriScores: row.chapterScores, // backward compat
+        formatifAverage: existing?.formatifAverage,
+        chapterScores: calc.chapterScores,
+        sumatifMateriScores: {
+          ...(existing?.sumatifMateriScores || {}),
+          ...calc.chapterScores
+        },
+        babAverage: calc.babAverage,
+        sumatifAverage: calc.sumatifAverage,
         sumatifAkhirSemester: row.sasScore ?? 0,
         hasSasScore: row.sasScore !== undefined,
-        finalScore: row.computedFinalScore ?? 0,
-        predicate: row.predicate || 'D',
+        sasNonTes: sasChanged ? undefined : existing?.sasNonTes,
+        sasTes: sasChanged ? row.sasScore : existing?.sasTes,
+        naSas: row.sasScore,
+        rawFinalScore: calc.rawFinalScore,
+        manualFinalScore: undefined,
+        finalScore: resolvedFinal,
+        predicate: calc.predicate || row.predicate || 'D',
+        completenessStatus: calc.completenessStatus,
+        hasMissingComponents: calc.hasMissingComponents,
+        missingComponentNote: calc.missingComponentNote,
+        finalScoreBreakdown: calc.breakdownText,
         selectedOptimalTpIds: existing?.selectedOptimalTpIds || [],
         selectedImprovementTpIds: existing?.selectedImprovementTpIds || [],
         highestCompetenceDesc: existing?.highestCompetenceDesc || '',
         lowestCompetenceDesc: existing?.lowestCompetenceDesc || '',
         finalDescription: existing?.finalDescription || '',
         descriptionStatus: existing?.descriptionStatus || 'Belum dibuat',
-        updatedAt: nowIso.replace('T', ' ').substring(0, 16),
+        updatedAt: nowIso,
         updatedBy: currentUser.name,
         updatedById: currentUser.id,
         status: 'SELESAI'
@@ -160,10 +202,10 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
       scoresToSave.push(updatedScore);
 
       // Also generate individual chapter SummativeAssessments so Sumatif module stays in sync
-      Object.entries(row.chapterScores).forEach(([chId, val]) => {
+      Object.entries(calc.chapterScores).forEach(([chId, val]) => {
         const ch = chapters.find((c) => c.id === chId);
         if (!ch) return;
-        const saId = `sa-bab-${chId}-${std.id}`;
+        const saId = buildDeterministicChapterSummativeId(chId, std.id);
         const summativeItem: SummativeAssessment = {
           id: saId,
           studentId: std.id,
@@ -176,7 +218,7 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
           tpId: ch.linkedTpIds?.[0] || 'tp-general',
           tpIds: ch.linkedTpIds?.length ? ch.linkedTpIds : ['tp-general'],
           assessmentTitle: `[Excel] ${ch.code}: ${ch.title}`,
-          date: new Date().toISOString().split('T')[0],
+          date: nowIso.split('T')[0],
           technique: 'tes tertulis',
           score: val,
           academicYear,
@@ -187,13 +229,27 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
       });
     });
 
+    if (scoresToSave.length === 0) {
+      setSuccessNotice(
+        skippedLockedCount > 0
+          ? `${skippedLockedCount} siswa berstatus TERKUNCI dilewati; tidak ada data yang diperbarui.`
+          : 'Tidak ada baris nilai valid untuk disimpan.'
+      );
+      setTimeout(() => setSuccessNotice(null), 4000);
+      return;
+    }
+
     onConfirmImport({
       scoresToSave,
       summativesToSave,
       notificationMessage: `Berhasil mengimpor dan menghitung nilai rapor untuk ${scoresToSave.length} siswa melalui Excel.`
     });
 
-    setSuccessNotice(`Berhasil menyimpan ${scoresToSave.length} data nilai dari Excel.`);
+    setSuccessNotice(
+      `Berhasil menyimpan ${scoresToSave.length} data nilai dari Excel.${
+        skippedLockedCount > 0 ? ` (${skippedLockedCount} siswa terkunci dilewati).` : ''
+      }`
+    );
     setParseResult(null);
     setTimeout(() => setSuccessNotice(null), 4000);
   };

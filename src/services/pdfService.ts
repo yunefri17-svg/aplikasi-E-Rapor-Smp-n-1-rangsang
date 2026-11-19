@@ -34,6 +34,7 @@ import {
   ElectiveHistoryRow,
   getElectiveHistoryRows,
   hasEnteredAssessmentScore,
+  hasEnteredNumericScore,
   normalizeAcademicYearValue,
   normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
@@ -883,34 +884,104 @@ export const generateBiodataSiswaPDF = (options: {
   doc.save(`Biodata_${student.nisn}_${student.name.replace(/\s+/g, '_')}.pdf`);
 };
 
-// Export Leger PDF
-export const generateLegerPDF = (
+// Export Leger PDF (buildable cleanly for both browser download & verification)
+export const buildLegerPDFDoc = (
   classroom: Classroom,
   students: Student[],
   subjects: Subject[],
   scores: AssessmentScore[],
   school: SchoolProfile,
   academicYear: string,
-  semester: string
-) => {
+  semester: string,
+  homeroomTeacher?: Teacher,
+  logoBase64?: string
+): jsPDF => {
   const doc = new jsPDF({
     orientation: 'landscape',
     unit: 'mm',
     format: 'a4'
   });
 
-  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageWidth = doc.internal.pageSize.getWidth(); // 297mm
+  const pageHeight = doc.internal.pageSize.getHeight(); // 210mm
+  const margin = 10;
+  const usableWidth = pageWidth - margin * 2; // 277mm
 
+  const schoolName = school.name || 'SMP Negeri 1 Rangsang';
+  const schoolKab = school.kabupaten || 'Kepulauan Meranti';
+  const schoolKec = school.kecamatan || 'Rangsang';
+  const schoolAddress = school.address || 'Jl. Pendidikan';
+  const waliName = homeroomTeacher?.name || '-';
+  const waliNip = homeroomTeacher?.nip ? `NIP. ${homeroomTeacher.nip}` : '';
+
+  // 1. Top decorative gradient-style accent bar (Navy Blue + Emerald + Amber strip)
+  doc.setFillColor(30, 64, 175); // Blue-800
+  doc.rect(0, 0, pageWidth, 3.2, 'F');
+  doc.setFillColor(16, 185, 129); // Emerald-500
+  doc.rect(pageWidth * 0.65, 0, pageWidth * 0.22, 3.2, 'F');
+  doc.setFillColor(245, 158, 11); // Amber-500
+  doc.rect(pageWidth * 0.87, 0, pageWidth * 0.13, 3.2, 'F');
+
+  // 2. Kop Sekolah
+  if (logoBase64) {
+    doc.addImage(logoBase64, 'PNG', margin + 2, 6, 15, 15);
+  }
+
+  doc.setTextColor(30, 58, 138);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.text(`LEGER NILAI HASIL BELAJAR PESERTA DIDIK`, pageWidth / 2, 12, { align: 'center' });
-  doc.setFontSize(10);
-  doc.text(`${school.name} - KELAS ${classroom.name.toUpperCase()}`, pageWidth / 2, 17, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.text(`Tahun Pelajaran: ${academicYear} | Semester: ${semester}`, pageWidth / 2, 22, { align: 'center' });
+  doc.text(`PEMERINTAH KABUPATEN ${schoolKab.toUpperCase()} • DINAS PENDIDIKAN DAN KEBUDAYAAN`, pageWidth / 2, 9.5, {
+    align: 'center'
+  });
 
-  // Map scores (aligned with Cetak Rapor)
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(11.5);
+  doc.text(`LEGER NILAI HASIL BELAJAR PESERTA DIDIK — ${schoolName.toUpperCase()}`, pageWidth / 2, 14.8, {
+    align: 'center'
+  });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `NPSN: ${school.npsn || '10400880'} • ${schoolAddress}, Kec. ${schoolKec}, Kab. ${schoolKab}`,
+    pageWidth / 2,
+    19.2,
+    { align: 'center' }
+  );
+
+  // 3. Kartu Info Rombel, Wali Kelas & Tahun Pelajaran (Soft Colored Banner)
+  doc.setFillColor(239, 246, 255); // Blue-50
+  doc.setDrawColor(147, 197, 253); // Blue-300
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, 22, usableWidth, 9.5, 1.8, 1.8, 'FD');
+
+  // Left accent inside info pill
+  doc.setFillColor(37, 99, 235);
+  doc.roundedRect(margin, 22, 2.2, 9.5, 1, 1, 'F');
+
+  doc.setFontSize(8);
+  doc.setTextColor(30, 58, 138);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Kelas / Rombel : ${classroom.name}`, margin + 6, 27.8);
+
+  doc.setTextColor(6, 95, 70);
+  doc.text(
+    `Wali Kelas : ${waliName}${waliNip ? ` (${waliNip})` : ''}`,
+    pageWidth / 2,
+    27.8,
+    { align: 'center' }
+  );
+
+  doc.setTextColor(55, 48, 163);
+  doc.text(
+    `TP ${academicYear} • Semester ${semester}`,
+    pageWidth - margin - 5,
+    27.8,
+    { align: 'right' }
+  );
+
+  // 4. Map scores (aligned with Cetak Rapor)
   const normYear = normalizeAcademicYearValue(academicYear);
   const normSem = normalizeSemesterValue(semester);
   const classStudentIdSet = new Set(students.map((s) => s.id));
@@ -920,8 +991,7 @@ export const generateLegerPDF = (
       (sc.classId === classroom.id || classStudentIdSet.has(sc.studentId)) &&
       normalizeSemesterValue(sc.semester) === normSem &&
       normalizeAcademicYearValue(sc.academicYear) === normYear &&
-      (hasEnteredAssessmentScore(sc) ||
-        (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0))
+      hasEnteredNumericScore(sc)
     ) {
       const resolvedVal = sc.manualFinalScore ?? sc.finalScore;
       if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
@@ -934,30 +1004,40 @@ export const generateLegerPDF = (
   const sortedSubjects = sortSubjects(subjects);
   const headers = ['No', 'NISN', 'Nama Siswa', 'JK', ...sortedSubjects.map((s) => s.code), 'Jml', 'Rata', 'Rank'];
 
+  const subjectSums = new Array<number>(sortedSubjects.length).fill(0);
+  const subjectCounts = new Array<number>(sortedSubjects.length).fill(0);
+
   const rowsData = students.map((std, idx) => {
     const sMap = scoreMap.get(std.id) || new Map();
     let total = 0;
     let count = 0;
 
-    const subjectScores = sortedSubjects.map((s) => {
+    const numericSubjectVals: Array<number | undefined> = [];
+    const subjectScores = sortedSubjects.map((s, sIdx) => {
       const val = sMap.get(s.id);
       if (typeof val === 'number') {
         total += val;
         count++;
+        subjectSums[sIdx] += val;
+        subjectCounts[sIdx] += 1;
+        numericSubjectVals.push(val);
         return String(val);
       }
+      numericSubjectVals.push(undefined);
       return '-';
     });
 
     const avg = count > 0 ? Number((total / count).toFixed(1)) : 0;
     return {
       idx: idx + 1,
-      nisn: std.nisn,
+      nisn: std.nisn || std.nis || '-',
       name: std.name,
       jk: std.gender,
       subjectScores,
+      numericSubjectVals,
       total,
-      avg
+      avg,
+      count
     };
   });
 
@@ -967,42 +1047,218 @@ export const generateLegerPDF = (
   sorted.forEach((item, rIdx) => rankLookup.set(item, rIdx + 1));
 
   const tableBody = rowsData.map((item) => [
-    item.idx,
+    String(item.idx),
     item.nisn,
     item.name,
     item.jk,
     ...item.subjectScores,
-    item.total,
-    item.avg,
-    rankLookup.get(item) || 1
+    item.count > 0 ? String(item.total) : '-',
+    item.count > 0 ? String(item.avg) : '-',
+    String(rankLookup.get(item) || 1)
   ]);
 
+  const gradedStudents = rowsData.filter((r) => r.count > 0);
+  const overallAvg =
+    gradedStudents.length > 0
+      ? (gradedStudents.reduce((acc, r) => acc + r.avg, 0) / gradedStudents.length).toFixed(1)
+      : '-';
+  const avgTotal =
+    gradedStudents.length > 0
+      ? Math.round(gradedStudents.reduce((acc, r) => acc + r.total, 0) / gradedStudents.length)
+      : '-';
+
+  const footerRow = [
+    '',
+    '',
+    'Rata-Rata Kelas',
+    '',
+    ...sortedSubjects.map((_, sIdx) =>
+      subjectCounts[sIdx] > 0 ? (subjectSums[sIdx] / subjectCounts[sIdx]).toFixed(1) : '-'
+    ),
+    String(avgTotal),
+    String(overallAvg),
+    '-'
+  ];
+
+  const subjectStartCol = 4;
+  const jmlColIdx = subjectStartCol + sortedSubjects.length;
+  const rataColIdx = jmlColIdx + 1;
+  const rankColIdx = jmlColIdx + 2;
+
   autoTable(doc, {
-    startY: 26,
+    startY: 34,
     head: [headers],
     body: tableBody,
-    theme: 'plain',
+    foot: [footerRow],
+    theme: 'grid',
     styles: {
-      fontSize: 7,
-      cellPadding: 1.5,
-      lineColor: [140, 140, 140],
-      lineWidth: 0.1
+      fontSize: 7.2,
+      cellPadding: 1.6,
+      lineColor: [203, 213, 225],
+      lineWidth: 0.15,
+      textColor: [30, 41, 59]
     },
     headStyles: {
-      fillColor: [230, 240, 250],
-      textColor: [0, 0, 0],
+      fillColor: [30, 64, 175], // Blue-800
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle'
+    },
+    footStyles: {
+      fillColor: [219, 234, 254], // Blue-100
+      textColor: [30, 58, 138],
       fontStyle: 'bold',
       halign: 'center'
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252]
     },
     columnStyles: {
       0: { halign: 'center', cellWidth: 8 },
       1: { halign: 'center', cellWidth: 20 },
-      2: { cellWidth: 42 },
-      3: { halign: 'center', cellWidth: 8 }
+      2: { cellWidth: 42, fontStyle: 'bold' },
+      3: { halign: 'center', cellWidth: 7 },
+      [jmlColIdx]: { halign: 'center', fontStyle: 'bold' },
+      [rataColIdx]: { halign: 'center', fontStyle: 'bold' },
+      [rankColIdx]: { halign: 'center', fontStyle: 'bold' }
     },
-    margin: { left: 10, right: 10 }
+    didParseCell: (data) => {
+      if (data.section === 'head') {
+        if (data.column.index === jmlColIdx) {
+          data.cell.styles.fillColor = [30, 58, 138]; // Navy
+        } else if (data.column.index === rataColIdx) {
+          data.cell.styles.fillColor = [67, 56, 202]; // Indigo-700
+        } else if (data.column.index === rankColIdx) {
+          data.cell.styles.fillColor = [180, 83, 9]; // Amber-700
+        }
+      }
+      if (data.section === 'foot' && data.column.index === 2) {
+        data.cell.styles.halign = 'left';
+      }
+      if (data.section === 'body') {
+        const rowData = rowsData[data.row.index];
+        if (!rowData) return;
+
+        // Subject score columns
+        if (data.column.index >= subjectStartCol && data.column.index < jmlColIdx) {
+          data.cell.styles.halign = 'center';
+          const sIdx = data.column.index - subjectStartCol;
+          const val = rowData.numericSubjectVals[sIdx];
+          const kkm = sortedSubjects[sIdx]?.kkm || 75;
+          if (val === undefined) {
+            data.cell.styles.textColor = [148, 163, 184];
+          } else if (val < kkm) {
+            data.cell.styles.fillColor = [255, 241, 242]; // Rose-50
+            data.cell.styles.textColor = [190, 18, 60]; // Rose-700
+            data.cell.styles.fontStyle = 'bold';
+          }
+        } else if (data.column.index === jmlColIdx) {
+          data.cell.styles.fillColor = [239, 246, 255];
+          data.cell.styles.textColor = [30, 64, 175];
+        } else if (data.column.index === rataColIdx) {
+          data.cell.styles.fillColor = [238, 242, 255];
+          data.cell.styles.textColor = [55, 48, 163];
+        } else if (data.column.index === rankColIdx) {
+          const rankVal = rankLookup.get(rowData) || 1;
+          if (rankVal === 1) {
+            data.cell.styles.fillColor = [254, 243, 199]; // Gold
+            data.cell.styles.textColor = [146, 64, 14];
+          } else if (rankVal === 2) {
+            data.cell.styles.fillColor = [226, 232, 240]; // Silver
+            data.cell.styles.textColor = [30, 41, 59];
+          } else if (rankVal === 3) {
+            data.cell.styles.fillColor = [254, 235, 200]; // Bronze
+            data.cell.styles.textColor = [154, 52, 18];
+          } else {
+            data.cell.styles.fillColor = [255, 251, 235];
+            data.cell.styles.textColor = [100, 116, 139];
+          }
+        }
+      }
+    },
+    margin: { left: margin, right: margin }
   });
 
+  // 5. Keterangan & Blok Tanda Tangan Kepala Sekolah + Wali Kelas
+  let afterTableY = ((doc as any).lastAutoTable?.finalY || 140) + 4;
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    'Keterangan: Sel berwarna merah muda menandakan nilai di bawah KKTP masing-masing mata pelajaran. Peringkat 1–3 ditandai warna emas, perak, dan perunggu.',
+    margin,
+    afterTableY
+  );
+
+  let signY = afterTableY + 6;
+  if (signY + 30 > pageHeight - 8) {
+    doc.addPage();
+    signY = 18;
+  }
+
+  const reportPlace = school.reportPlace || schoolKec || 'Tanjung Samak';
+  const reportDate =
+    school.reportDate ||
+    new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+
+  const leftSignX = margin + 12;
+  const rightSignX = pageWidth - margin - 72;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Mengetahui,', leftSignX, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Kepala ${schoolName},`, leftSignX, signY + 4.5);
+  doc.text(school.headmasterName || '.........................', leftSignX, signY + 21);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`NIP. ${school.headmasterNip || '-'}`, leftSignX, signY + 25);
+
+  doc.setFontSize(8.5);
+  doc.text(`${reportPlace}, ${reportDate}`, rightSignX, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Wali Kelas ${classroom.name},`, rightSignX, signY + 4.5);
+  doc.text(waliName !== '-' ? waliName : '.........................', rightSignX, signY + 21);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(homeroomTeacher?.nip ? `NIP. ${homeroomTeacher.nip}` : 'NIP. -', rightSignX, signY + 25);
+
+  return doc;
+};
+
+export const generateLegerPDF = async (
+  classroom: Classroom,
+  students: Student[],
+  subjects: Subject[],
+  scores: AssessmentScore[],
+  school: SchoolProfile,
+  academicYear: string,
+  semester: string,
+  homeroomTeacher?: Teacher
+) => {
+  let logoBase64 = '';
+  try {
+    logoBase64 = await getTutWuriHandayaniDataUrl();
+  } catch {
+    logoBase64 = '';
+  }
+  const doc = buildLegerPDFDoc(
+    classroom,
+    students,
+    subjects,
+    scores,
+    school,
+    academicYear,
+    semester,
+    homeroomTeacher,
+    logoBase64
+  );
   doc.save(`Leger_${classroom.name.replace(/\s+/g, '_')}_${academicYear.replace('/', '-')}.pdf`);
 };
 
@@ -1380,5 +1636,527 @@ export const generateElectiveTranscriptPDF = (opts: ElectiveTranscriptPDFOptions
   const doc = buildElectiveTranscriptPDFDoc(opts);
   doc.save(`Riwayat_Mapel_Pilihan_${student.nisn || student.nis}_${student.name.replace(/\s+/g, '_')}.pdf`);
 };
+
+export interface PengolahanNilaiPDFOptions {
+  school?: Partial<SchoolProfile>;
+  classroom: Classroom;
+  subject: Subject;
+  academicYear: string;
+  semester: 'Ganjil' | 'Genap';
+  subjectTeacherName: string;
+  subjectTeacherNip?: string;
+  homeroomTeacherName?: string;
+  kkm: number;
+  stats: {
+    totalStudents: number;
+    totalEntries: number;
+    averageScore: number;
+    maxScore: number;
+    minScore: number;
+    passedCount: number;
+    remedialCount: number;
+    passingRate: number;
+    predA: number;
+    predB: number;
+    predC: number;
+    predD: number;
+  };
+  rows: Array<{
+    no: number;
+    nisn: string;
+    name: string;
+    score?: number;
+    predicate: string;
+    statusLabel: string;
+    isPassed?: boolean;
+  }>;
+}
+
+export const buildPengolahanNilaiPDFDoc = (
+  opts: PengolahanNilaiPDFOptions,
+  logoBase64?: string
+): jsPDF => {
+  const {
+    school,
+    classroom,
+    subject,
+    academicYear,
+    semester,
+    subjectTeacherName,
+    subjectTeacherNip,
+    homeroomTeacherName,
+    kkm,
+    stats,
+    rows
+  } = opts;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  const usableWidth = pageWidth - margin * 2; // 182mm
+
+  const schoolName = school?.name || 'SMP Negeri 1 Rangsang';
+  const schoolNpsn = school?.npsn || '10400880';
+  const schoolAddress = school?.address || 'Jl. Pendidikan';
+  const schoolKec = school?.kecamatan || 'Rangsang';
+  const schoolKab = school?.kabupaten || 'Kepulauan Meranti';
+  const reportPlace = school?.reportPlace || schoolKec || 'Tanjung Samak';
+  const reportDate =
+    school?.reportDate ||
+    new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+
+  // 1. Kop Sekolah
+  if (logoBase64) {
+    doc.addImage(logoBase64, 'PNG', margin, 10.5, 16.5, 16.5);
+  }
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(`PEMERINTAH KABUPATEN ${schoolKab.toUpperCase()}`, pageWidth / 2, 14, { align: 'center' });
+  doc.setFontSize(9.5);
+  doc.text('DINAS PENDIDIKAN DAN KEBUDAYAAN', pageWidth / 2, 18.5, { align: 'center' });
+  doc.setFontSize(12);
+  doc.text(schoolName.toUpperCase(), pageWidth / 2, 24, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `NPSN: ${schoolNpsn} • ${schoolAddress}, Kec. ${schoolKec}, Kab. ${schoolKab}`,
+    pageWidth / 2,
+    28.5,
+    { align: 'center' }
+  );
+
+  doc.setDrawColor(30, 41, 59);
+  doc.setLineWidth(0.7);
+  doc.line(margin, 31.5, pageWidth - margin, 31.5);
+  doc.setLineWidth(0.2);
+  doc.line(margin, 32.5, pageWidth - margin, 32.5);
+
+  // 2. Judul Dokumen
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('PENGOLAHAN & ANALISIS HASIL PENILAIAN MATA PELAJARAN', pageWidth / 2, 39.5, {
+    align: 'center'
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Tahun Pelajaran ${academicYear} • Semester ${semester}`, pageWidth / 2, 44.5, {
+    align: 'center'
+  });
+
+  // 3. Blok Identitas Mapel, Kelas & Guru Mata Pelajaran
+  const teacherDisplay = subjectTeacherNip
+    ? `${subjectTeacherName} (NIP. ${subjectTeacherNip})`
+    : subjectTeacherName;
+
+  autoTable(doc, {
+    startY: 48,
+    body: [
+      [
+        'Mata Pelajaran',
+        ':',
+        `${subject.name} (${subject.code})`,
+        'Kelas / Rombel',
+        ':',
+        classroom.name
+      ],
+      [
+        'Guru Mata Pelajaran',
+        ':',
+        teacherDisplay || '-',
+        'KKTP Satuan Pendidikan',
+        ':',
+        String(kkm)
+      ],
+      [
+        'Wali Kelas',
+        ':',
+        homeroomTeacherName || '-',
+        'Siswa Dinilai',
+        ':',
+        `${stats.totalEntries} dari ${stats.totalStudents} Siswa`
+      ]
+    ],
+    theme: 'plain',
+    styles: {
+      fontSize: 8,
+      cellPadding: 1.6,
+      textColor: [30, 41, 59],
+      fillColor: [248, 250, 252]
+    },
+    columnStyles: {
+      0: { cellWidth: 32, fontStyle: 'bold', textColor: [71, 85, 105] },
+      1: { cellWidth: 3, halign: 'center' },
+      2: { cellWidth: 64, fontStyle: 'bold' },
+      3: { cellWidth: 35, fontStyle: 'bold', textColor: [71, 85, 105] },
+      4: { cellWidth: 3, halign: 'center' },
+      5: { cellWidth: 45, fontStyle: 'bold' }
+    },
+    margin: { left: margin, right: margin },
+    tableLineColor: [226, 232, 240],
+    tableLineWidth: 0.2
+  });
+
+  // 4. Bagan Ringkasan Statistik (4 Kartu)
+  const statSectionY = ((doc as any).lastAutoTable?.finalY || 68) + 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text('A. RINGKASAN STATISTIK & KETUNTASAN BELAJAR', margin, statSectionY);
+
+  const cardY = statSectionY + 2.5;
+  const cardGap = 3;
+  const cardWidth = (usableWidth - cardGap * 3) / 4; // 43.25mm
+  const cardHeight = 19.5;
+
+  const statCards: Array<{
+    title: string;
+    value: string;
+    subtitle: string;
+    fill: [number, number, number];
+    border: [number, number, number];
+    titleColor: [number, number, number];
+    valueColor: [number, number, number];
+  }> = [
+    {
+      title: 'Rata-Rata Kelas',
+      value: String(stats.averageScore),
+      subtitle: `Dari ${stats.totalEntries} nilai siswa`,
+      fill: [239, 246, 255],
+      border: [191, 219, 254],
+      titleColor: [30, 64, 175],
+      valueColor: [29, 78, 216]
+    },
+    {
+      title: 'Tingkat Ketuntasan',
+      value: `${stats.passingRate}%`,
+      subtitle: `${stats.passedCount} Tuntas • ${stats.remedialCount} Remedial`,
+      fill: [236, 253, 245],
+      border: [167, 243, 208],
+      titleColor: [6, 95, 70],
+      valueColor: [5, 150, 105]
+    },
+    {
+      title: 'Nilai Tertinggi',
+      value: String(stats.maxScore),
+      subtitle: 'Pencapaian Maksimal',
+      fill: [238, 242, 255],
+      border: [199, 210, 254],
+      titleColor: [55, 48, 163],
+      valueColor: [67, 56, 202]
+    },
+    {
+      title: 'Nilai Terendah',
+      value: String(stats.minScore),
+      subtitle: 'Batas Bawah Kelas',
+      fill: [255, 241, 242],
+      border: [254, 205, 211],
+      titleColor: [159, 18, 57],
+      valueColor: [225, 29, 72]
+    }
+  ];
+
+  statCards.forEach((card, i) => {
+    const x = margin + i * (cardWidth + cardGap);
+    doc.setFillColor(...card.fill);
+    doc.setDrawColor(...card.border);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(x, cardY, cardWidth, cardHeight, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...card.titleColor);
+    doc.text(card.title, x + 3, cardY + 5);
+
+    doc.setFontSize(14);
+    doc.setTextColor(...card.valueColor);
+    doc.text(card.value, x + 3, cardY + 12.2);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(71, 85, 105);
+    doc.text(card.subtitle, x + 3, cardY + 16.8);
+  });
+
+  // 5. Bagan Distribusi Predikat (A, B, C, D) + Grafik Batang Proporsi
+  const predSectionY = cardY + cardHeight + 6;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text('B. BAGAN DISTRIBUSI PREDIKAT CAPAIAN SISWA (A, B, C, D)', margin, predSectionY);
+
+  const predBoxY = predSectionY + 2.5;
+  const predBoxHeight = 46;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, predBoxY, usableWidth, predBoxHeight, 2, 2, 'FD');
+
+  const denom = Math.max(1, stats.totalEntries);
+  const toPct = (count: number) =>
+    stats.totalEntries > 0 ? Math.round((count / denom) * 100) : 0;
+
+  const predItems: Array<{
+    label: string;
+    shortLabel: string;
+    desc: string;
+    count: number;
+    pct: number;
+    fill: [number, number, number];
+    border: [number, number, number];
+    barColor: [number, number, number];
+    textColor: [number, number, number];
+  }> = [
+    {
+      label: 'Predikat A (>= 90)',
+      shortLabel: 'A (>= 90)',
+      desc: 'Sangat Baik',
+      count: stats.predA,
+      pct: toPct(stats.predA),
+      fill: [239, 246, 255],
+      border: [191, 219, 254],
+      barColor: [37, 99, 235],
+      textColor: [30, 64, 175]
+    },
+    {
+      label: 'Predikat B (80 - 89)',
+      shortLabel: 'B (80 - 89)',
+      desc: 'Baik',
+      count: stats.predB,
+      pct: toPct(stats.predB),
+      fill: [236, 253, 245],
+      border: [167, 243, 208],
+      barColor: [16, 185, 129],
+      textColor: [6, 95, 70]
+    },
+    {
+      label: `Predikat C (${kkm} - 79)`,
+      shortLabel: `C (${kkm} - 79)`,
+      desc: 'Cukup',
+      count: stats.predC,
+      pct: toPct(stats.predC),
+      fill: [255, 251, 235],
+      border: [253, 230, 138],
+      barColor: [245, 158, 11],
+      textColor: [146, 64, 14]
+    },
+    {
+      label: `Predikat D (< ${kkm})`,
+      shortLabel: `D (< ${kkm})`,
+      desc: 'Perlu Bimbingan',
+      count: stats.predD,
+      pct: toPct(stats.predD),
+      fill: [255, 241, 242],
+      border: [254, 205, 211],
+      barColor: [225, 29, 72],
+      textColor: [159, 18, 57]
+    }
+  ];
+
+  const innerPad = 3;
+  const innerCardGap = 2.5;
+  const innerCardW = (usableWidth - innerPad * 2 - innerCardGap * 3) / 4;
+  const innerCardH = 16.5;
+  const innerCardY = predBoxY + 3;
+
+  predItems.forEach((p, i) => {
+    const x = margin + innerPad + i * (innerCardW + innerCardGap);
+    doc.setFillColor(...p.fill);
+    doc.setDrawColor(...p.border);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(x, innerCardY, innerCardW, innerCardH, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(...p.textColor);
+    doc.text(p.label, x + innerCardW / 2, innerCardY + 4.5, { align: 'center' });
+
+    doc.setFontSize(12);
+    doc.text(`${p.count}`, x + innerCardW / 2, innerCardY + 10.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.text(`${p.desc} (${p.pct}%)`, x + innerCardW / 2, innerCardY + 14.5, { align: 'center' });
+  });
+
+  // Horizontal bar chart inside box
+  const chartStartY = innerCardY + innerCardH + 4;
+  const labelX = margin + innerPad;
+  const trackX = margin + innerPad + 26;
+  const trackW = usableWidth - innerPad * 2 - 26 - 30; // ~120mm
+  const valueX = trackX + trackW + 3;
+
+  predItems.forEach((p, idx) => {
+    const ry = chartStartY + idx * 5.2;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(51, 65, 85);
+    doc.text(p.shortLabel, labelX, ry + 2.8);
+
+    // Track
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(trackX, ry, trackW, 3.4, 1, 1, 'F');
+
+    // Fill
+    const fillW = stats.totalEntries > 0 ? Math.max(p.count > 0 ? 2 : 0, (p.count / denom) * trackW) : 0;
+    if (fillW > 0) {
+      doc.setFillColor(...p.barColor);
+      doc.roundedRect(trackX, ry, fillW, 3.4, 1, 1, 'F');
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(`${p.count} siswa (${p.pct}%)`, valueX, ry + 2.7);
+  });
+
+  // 6. Tabel Daftar Nilai & Ketuntasan Siswa
+  const tableTitleY = predBoxY + predBoxHeight + 6;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text('C. DAFTAR NILAI AKHIR & STATUS KETERCAPAIAN PESERTA DIDIK', margin, tableTitleY);
+
+  const tableBody = rows.map((r) => [
+    String(r.no),
+    r.nisn || '-',
+    r.name,
+    r.score !== undefined ? String(r.score) : '-',
+    r.predicate || '-',
+    r.statusLabel
+  ]);
+
+  autoTable(doc, {
+    startY: tableTitleY + 2.5,
+    head: [['No', 'NISN', 'Nama Peserta Didik', 'Nilai Akhir', 'Predikat', 'Status Ketercapaian']],
+    body: tableBody,
+    foot: [
+      [
+        '',
+        '',
+        'Rata-Rata & Ketuntasan Kelas',
+        String(stats.averageScore),
+        '-',
+        `${stats.passingRate}% Tuntas (${stats.passedCount}/${stats.totalEntries})`
+      ]
+    ],
+    theme: 'plain',
+    styles: {
+      fontSize: 7.8,
+      cellPadding: 1.9,
+      lineColor: [203, 213, 225],
+      lineWidth: 0.15,
+      textColor: [30, 41, 59]
+    },
+    headStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      halign: 'center'
+    },
+    footStyles: {
+      fillColor: [239, 246, 255],
+      textColor: [30, 64, 175],
+      fontStyle: 'bold',
+      halign: 'center'
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { halign: 'center', cellWidth: 26 },
+      2: { cellWidth: 64, fontStyle: 'bold' },
+      3: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+      4: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+      5: { halign: 'center', cellWidth: 44 }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'foot' && data.column.index === 2) {
+        data.cell.styles.halign = 'left';
+      }
+      if (data.section === 'body') {
+        const rowData = rows[data.row.index];
+        if (!rowData) return;
+        if (rowData.score === undefined) {
+          if (data.column.index >= 3) {
+            data.cell.styles.textColor = [148, 163, 184];
+          }
+        } else if (rowData.isPassed === false) {
+          if (data.column.index === 3 || data.column.index === 5) {
+            data.cell.styles.textColor = [190, 18, 60];
+            data.cell.styles.fillColor = [255, 241, 242];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        } else if (rowData.isPassed === true) {
+          if (data.column.index === 3 || data.column.index === 5) {
+            data.cell.styles.textColor = [4, 120, 87];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        }
+      }
+    },
+    margin: { left: margin, right: margin }
+  });
+
+  // 7. Blok Pengesahan & Tanda Tangan Guru Mapel
+  let signY = ((doc as any).lastAutoTable?.finalY || 220) + 10;
+  if (signY + 34 > pageHeight - 12) {
+    doc.addPage();
+    signY = 20;
+  }
+
+  const leftSignX = margin + 4;
+  const rightSignX = pageWidth - margin - 62;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text('Mengetahui,', leftSignX, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Kepala ${schoolName},`, leftSignX, signY + 4.5);
+  doc.text(school?.headmasterName || '.........................', leftSignX, signY + 23);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`NIP. ${school?.headmasterNip || '-'}`, leftSignX, signY + 27);
+
+  doc.setFontSize(8.5);
+  doc.text(`${reportPlace}, ${reportDate}`, rightSignX, signY);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Guru Mata Pelajaran,', rightSignX, signY + 4.5);
+  doc.text(subjectTeacherName || '-', rightSignX, signY + 23);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(subjectTeacherNip ? `NIP. ${subjectTeacherNip}` : 'NIP. -', rightSignX, signY + 27);
+
+  return doc;
+};
+
+export const generatePengolahanNilaiPDF = async (opts: PengolahanNilaiPDFOptions) => {
+  let logoBase64 = '';
+  try {
+    logoBase64 = await getTutWuriHandayaniDataUrl();
+  } catch {
+    logoBase64 = '';
+  }
+  const doc = buildPengolahanNilaiPDFDoc(opts, logoBase64);
+  const safeClass = opts.classroom.name.replace(/\s+/g, '_');
+  const safeSubject = (opts.subject.code || opts.subject.name).replace(/\s+/g, '_');
+  const safeYear = opts.academicYear.replace(/\//g, '-');
+  doc.save(`Pengolahan_Nilai_${safeSubject}_${safeClass}_${safeYear}_${opts.semester}.pdf`);
+};
+
 
 

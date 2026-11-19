@@ -79,8 +79,10 @@ import {
   checkSummativePlanInUse
 } from './utils/authorizationGuard';
 import {
+  aggregateChapterScoresFromSummatives,
   buildDeterministicScoreId,
   computeStudentReportScore,
+  filterChaptersForContext,
   getEffectiveSasScore,
   resolveSchoolWeights
 } from './utils/assessmentCalculation';
@@ -2121,23 +2123,38 @@ export default function App() {
         }
 
         const weights = resolveSchoolWeights(prev.curricula);
-        const contextChapters = (prev.learningChapters || []).filter(
-          (ch) =>
-            ch.subjectId === sa.subjectId &&
-            ch.classId === sa.classId &&
-            ch.academicYear === sa.academicYear &&
-            ch.semester === sa.semester
-        );
+        const contextChapters = filterChaptersForContext(prev.learningChapters || [], {
+          subjectId: sa.subjectId,
+          classId: sa.classId,
+          academicYear: sa.academicYear,
+          semester: sa.semester
+        });
+        const updatedChapterScores =
+          contextChapters.length > 0
+            ? aggregateChapterScoresFromSummatives({
+                studentId: sa.studentId,
+                subjectId: sa.subjectId,
+                classId: sa.classId,
+                academicYear: sa.academicYear,
+                semester: sa.semester,
+                chapters: contextChapters,
+                summativeAssessments: newSummatives,
+                existingChapterScores: existingScore?.chapterScores,
+                existingScoreUpdatedAt: existingScore?.updatedAt
+              })
+            : existingScore?.chapterScores;
+
+        const mergedLegacyMateri = { ...(existingScore?.sumatifMateriScores || {}), ...tpAverages };
         const calcResult = computeStudentReportScore({
           chapters: contextChapters,
-          chapterScores: existingScore?.chapterScores,
+          chapterScores: updatedChapterScores,
           sasScore: getEffectiveSasScore(existingScore),
           formatifScores: existingScore?.formatifScores,
           manualFinalScore: existingScore?.manualFinalScore,
           formatifWeightPercent: weights.formatifWeightPercent,
           sumatifWeightPercent: weights.sumatifWeightPercent,
           passingCriteria: weights.passingCriteria,
-          legacyMateriScores: { ...(existingScore?.sumatifMateriScores || {}), ...tpAverages }
+          legacyMateriScores: contextChapters.length > 0 ? undefined : mergedLegacyMateri
         });
 
         // Preserve existing finalScore unless school weights or explicit formula yielded a valid score for non-finalized records
@@ -2158,7 +2175,10 @@ export default function App() {
         const updatedScore: AssessmentScore = existingScore
           ? {
               ...existingScore,
-              sumatifMateriScores: { ...existingScore.sumatifMateriScores, ...tpAverages },
+              chapterScores: updatedChapterScores,
+              sumatifMateriScores: mergedLegacyMateri,
+              babAverage: calcResult.babAverage,
+              sumatifAverage: calcResult.sumatifAverage,
               finalScore: resolvedFinalScore,
               predicate: pred,
               descriptionStatus: isManualOrLockedDesc
@@ -2176,7 +2196,10 @@ export default function App() {
               academicYear: sa.academicYear,
               semester: sa.semester,
               formatifScores: {},
+              chapterScores: updatedChapterScores,
               sumatifMateriScores: tpAverages,
+              babAverage: calcResult.babAverage,
+              sumatifAverage: calcResult.sumatifAverage,
               sumatifAkhirSemester: 0,
               hasSasScore: false,
               finalScore: resolvedFinalScore,
@@ -2798,6 +2821,7 @@ export default function App() {
               curricula={db.curricula}
               teachers={db.teachers}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
+              learningObjectives={db.learningObjectives}
               learningChapters={db.learningChapters || EMPTY_ARRAY}
               summativePlans={db.summativePlans || EMPTY_ARRAY}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
@@ -2990,6 +3014,7 @@ export default function App() {
 
           {activeMenu === 'pengolahan-nilai' && (
             <PengolahanNilaiView
+              school={db.schoolProfile}
               classrooms={db.classrooms}
               subjects={db.subjects}
               students={db.students}
@@ -3054,6 +3079,7 @@ export default function App() {
               subjects={db.subjects}
               students={db.students}
               scores={db.scores}
+              teachers={db.teachers}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               academicYear={db.schoolProfile.activeAcademicYear}
               semester={db.schoolProfile.activeSemester}

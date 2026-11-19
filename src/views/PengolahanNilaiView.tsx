@@ -1,11 +1,38 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Classroom, Subject, Student, AssessmentScore, User, Teacher, TeachingAssignment } from '../types/erapor';
-import { Calculator, TrendingUp, Award, CheckCircle2, AlertTriangle, Users, BookOpen, Lock } from 'lucide-react';
+import {
+  Classroom,
+  Subject,
+  Student,
+  AssessmentScore,
+  User,
+  Teacher,
+  TeachingAssignment,
+  SchoolProfile
+} from '../types/erapor';
+import {
+  Calculator,
+  CheckCircle2,
+  AlertTriangle,
+  Download,
+  Loader2,
+  UserCheck
+} from 'lucide-react';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { resolveTeacherForUser } from '../utils/teacherAssignmentHelper';
+import {
+  hasEnteredNumericScore,
+  isStudentParticipatingInSubject,
+  matchesAssignmentPeriod,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
+import { calculatePredicate } from '../services/storage';
+import { generatePengolahanNilaiPDF } from '../services/pdfService';
 
 interface PengolahanNilaiViewProps {
+  school?: SchoolProfile;
   classrooms: Classroom[];
   subjects: Subject[];
   students: Student[];
@@ -18,6 +45,7 @@ interface PengolahanNilaiViewProps {
 }
 
 export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
+  school,
   classrooms,
   subjects,
   students,
@@ -31,16 +59,10 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'kepsek';
 
   // Find teacher profile for current user
-  const currentTeacher = useMemo(() => {
-    return teachers.find(
-      (t) =>
-        (currentUser.teacherId && t.id === currentUser.teacherId) ||
-        (currentUser.nip && t.nip === currentUser.nip) ||
-        (t.name.toLowerCase().includes('fauzi') && currentUser.name.toLowerCase().includes('fauzi')) ||
-        (t.name.toLowerCase().includes('nikmatul') && currentUser.name.toLowerCase().includes('nikmatul')) ||
-        t.name.toLowerCase().trim() === currentUser.name.toLowerCase().trim()
-    );
-  }, [teachers, currentUser]);
+  const currentTeacher = useMemo(
+    () => resolveTeacherForUser(currentUser, teachers),
+    [teachers, currentUser]
+  );
 
   // 1. Available subjects for current user based on teaching assignments
   const visibleSubjects = useMemo(() => {
@@ -122,27 +144,131 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
     );
   }
 
-  const classStudents = useMemo(
-    () => sortStudentsAlphabetically(students.filter((s) => s.classId === selectedClass)),
-    [students, selectedClass]
-  );
   const subjectObj = subjects.find((s) => s.id === selectedSubject);
+  const selectedClassroomObj = classrooms.find((c) => c.id === selectedClass);
   const kkm = subjectObj?.kkm || 75;
 
+  const classStudents = useMemo(() => {
+    const activeInClass = sortStudentsAlphabetically(
+      students.filter((s) => s.classId === selectedClass && s.status === 'Aktif')
+    );
+    if (!subjectObj) return activeInClass;
+    return activeInClass.filter((std) =>
+      isStudentParticipatingInSubject({
+        subject: subjectObj,
+        studentId: std.id,
+        classId: selectedClass,
+        academicYear,
+        semester,
+        teachingAssignments,
+        scores
+      })
+    );
+  }, [
+    students,
+    selectedClass,
+    subjectObj,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores
+  ]);
+
+  const classStudentIdSet = useMemo(() => new Set(classStudents.map((s) => s.id)), [classStudents]);
+
+  const normYear = normalizeAcademicYearValue(academicYear);
+  const normSem = normalizeSemesterValue(semester);
   const relevantScores = scores.filter(
     (sc) =>
-      sc.classId === selectedClass &&
+      (sc.classId === selectedClass || classStudentIdSet.has(sc.studentId)) &&
       sc.subjectId === selectedSubject &&
-      sc.academicYear === academicYear &&
-      sc.semester === semester
+      normalizeAcademicYearValue(sc.academicYear) === normYear &&
+      normalizeSemesterValue(sc.semester) === normSem
   );
 
   const scoreMap = new Map(relevantScores.map((s) => [s.studentId, s]));
 
-  // Statistical calculations
+  // Resolve Subject Teacher Name & NIP for header and PDF signature
+  const subjectTeacherInfo = useMemo(() => {
+    const periodMatch = teachingAssignments.find(
+      (ta) =>
+        ta.subjectId === selectedSubject &&
+        ta.classId === selectedClass &&
+        matchesAssignmentPeriod(ta, academicYear, semester)
+    );
+    const anyTaMatch =
+      periodMatch ||
+      teachingAssignments.find(
+        (ta) =>
+          ta.subjectId === selectedSubject &&
+          ta.classId === selectedClass &&
+          ta.status !== 'inactive'
+      );
+
+    if (anyTaMatch) {
+      const matchedTeacher =
+        teachers.find((t) => t.id === anyTaMatch.teacherId) ||
+        teachers.find(
+          (t) =>
+            t.name.trim().toLowerCase() === (anyTaMatch.teacherName || '').trim().toLowerCase()
+        );
+      if (matchedTeacher) {
+        return { name: matchedTeacher.name, nip: matchedTeacher.nip };
+      }
+      if (anyTaMatch.teacherName) {
+        return { name: anyTaMatch.teacherName, nip: undefined };
+      }
+    }
+
+    const scoreTeacher = relevantScores.find((sc) => sc.teacherId || sc.teacherName);
+    if (scoreTeacher) {
+      const matched = scoreTeacher.teacherId
+        ? teachers.find((t) => t.id === scoreTeacher.teacherId)
+        : undefined;
+      if (matched) return { name: matched.name, nip: matched.nip };
+      if (scoreTeacher.teacherName) return { name: scoreTeacher.teacherName, nip: undefined };
+    }
+
+    if (currentTeacher && currentUser.role === 'guru') {
+      return { name: currentTeacher.name, nip: currentTeacher.nip };
+    }
+
+    const bySubjectTaught = teachers.find((t) =>
+      (t.subjectsTaught || []).includes(selectedSubject)
+    );
+    if (bySubjectTaught) {
+      return { name: bySubjectTaught.name, nip: bySubjectTaught.nip };
+    }
+
+    return { name: currentTeacher?.name || currentUser.name || '-', nip: currentTeacher?.nip };
+  }, [
+    teachingAssignments,
+    teachers,
+    selectedSubject,
+    selectedClass,
+    academicYear,
+    semester,
+    relevantScores,
+    currentTeacher,
+    currentUser.name,
+    currentUser.role
+  ]);
+
+  const homeroomTeacherName = useMemo(() => {
+    if (!selectedClassroomObj?.homeroomTeacherId) return '-';
+    return (
+      teachers.find((t) => t.id === selectedClassroomObj.homeroomTeacherId)?.name || '-'
+    );
+  }, [selectedClassroomObj, teachers]);
+
+  // Statistical calculations (only genuine numeric grades; exclude Formatif-only 0 placeholders)
   const numericScores = classStudents
-    .map((std) => scoreMap.get(std.id)?.finalScore)
-    .filter((n): n is number => n !== undefined);
+    .map((std) => {
+      const sc = scoreMap.get(std.id);
+      if (!hasEnteredNumericScore(sc)) return undefined;
+      return sc!.manualFinalScore ?? sc!.finalScore;
+    })
+    .filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
 
   const totalEntries = numericScores.length;
   const averageScore = totalEntries > 0 ? Math.round(numericScores.reduce((a, b) => a + b, 0) / totalEntries) : 0;
@@ -159,6 +285,64 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
   const predC = numericScores.filter((s) => s >= kkm && s < 80).length;
   const predD = numericScores.filter((s) => s < kkm).length;
 
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  const handleExportPDF = async () => {
+    if (!selectedClassroomObj || !subjectObj) return;
+    setIsExportingPdf(true);
+    try {
+      const pdfRows = classStudents.map((std, idx) => {
+        const sc = scoreMap.get(std.id);
+        const hasScore = hasEnteredNumericScore(sc);
+        const scoreVal = hasScore ? sc!.manualFinalScore ?? sc!.finalScore : undefined;
+        const isPassed = scoreVal !== undefined ? scoreVal >= kkm : undefined;
+        return {
+          no: idx + 1,
+          nisn: std.nisn || std.nis || '-',
+          name: std.name,
+          score: scoreVal,
+          predicate: scoreVal !== undefined ? calculatePredicate(scoreVal, kkm) : '-',
+          statusLabel:
+            scoreVal === undefined
+              ? 'Nilai belum diinput'
+              : isPassed
+              ? 'Tuntas (Mencapai KKTP)'
+              : 'Belum Tuntas (Perlu Remidial)',
+          isPassed
+        };
+      });
+
+      await generatePengolahanNilaiPDF({
+        school,
+        classroom: selectedClassroomObj,
+        subject: subjectObj,
+        academicYear,
+        semester,
+        subjectTeacherName: subjectTeacherInfo.name,
+        subjectTeacherNip: subjectTeacherInfo.nip,
+        homeroomTeacherName,
+        kkm,
+        stats: {
+          totalStudents: classStudents.length,
+          totalEntries,
+          averageScore,
+          maxScore,
+          minScore,
+          passedCount,
+          remedialCount,
+          passingRate,
+          predA,
+          predB,
+          predC,
+          predD
+        },
+        rows: pdfRows
+      });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
@@ -171,6 +355,19 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
             Analisis ketuntasan kompetensi, distribusi predikat (A, B, C, D), dan daya serap pembelajaran per mata pelajaran.
           </p>
         </div>
+
+        <button
+          onClick={handleExportPDF}
+          disabled={isExportingPdf || !selectedClassroomObj || !subjectObj}
+          className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition self-start sm:self-auto"
+        >
+          {isExportingPdf ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Download className="w-4 h-4" />
+          )}
+          {isExportingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF'}
+        </button>
       </div>
 
       {/* Selectors */}
@@ -196,15 +393,22 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
               onChange={(e) => setSelectedSubject(e.target.value)}
               className="px-3 py-2 rounded-lg border border-slate-300 font-bold bg-white text-slate-800"
             >
-              {subjects.map((s) => (
+              {visibleSubjects.map((s) => (
                 <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
               ))}
             </select>
           </div>
         </div>
 
-        <div className="text-xs font-semibold text-slate-600">
-          KKTP Satuan Pendidikan: <span className="text-blue-700 font-bold">{kkm}</span>
+        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-slate-600">
+          <div className="flex items-center gap-1.5">
+            <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Guru Mapel:</span>
+            <span className="text-slate-900 font-bold">{subjectTeacherInfo.name}</span>
+          </div>
+          <div>
+            KKTP Satuan Pendidikan: <span className="text-blue-700 font-bold">{kkm}</span>
+          </div>
         </div>
       </div>
 
@@ -255,13 +459,13 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
           </div>
 
           <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
-            <span className="text-xs font-bold text-amber-800">Predikat C (75 - 79)</span>
+            <span className="text-xs font-bold text-amber-800">Predikat C ({kkm} - 79)</span>
             <p className="text-xl font-black text-amber-700 mt-1">{predC}</p>
             <span className="text-[10px] text-amber-600 font-medium">Cukup</span>
           </div>
 
           <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
-            <span className="text-xs font-bold text-rose-800">Predikat D (&lt; 75)</span>
+            <span className="text-xs font-bold text-rose-800">Predikat D (&lt; {kkm})</span>
             <p className="text-xl font-black text-rose-700 mt-1">{predD}</p>
             <span className="text-[10px] text-rose-600 font-medium">Perlu Bimbingan</span>
           </div>
@@ -285,9 +489,10 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {classStudents.map((std, idx) => {
                 const sc = scoreMap.get(std.id);
-                const hasScore = sc && sc.finalScore !== undefined;
-                const scoreVal = sc?.finalScore ?? 0;
+                const hasScore = hasEnteredNumericScore(sc);
+                const scoreVal = sc?.manualFinalScore ?? sc?.finalScore ?? 0;
                 const isPassed = scoreVal >= kkm;
+                const displayPred = hasScore ? calculatePredicate(scoreVal, kkm) : '-';
 
                 return (
                   <tr key={std.id} className="hover:bg-slate-50/70">
@@ -306,7 +511,7 @@ export const PengolahanNilaiView: React.FC<PengolahanNilaiViewProps> = ({
                     <td className="px-4 py-3 text-center font-bold">
                       {hasScore ? (
                         <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800">
-                          {sc.predicate}
+                          {displayPred}
                         </span>
                       ) : (
                         '-'

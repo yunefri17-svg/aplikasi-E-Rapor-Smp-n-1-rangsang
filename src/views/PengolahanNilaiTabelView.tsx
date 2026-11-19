@@ -10,6 +10,7 @@ import {
   Curriculum,
   FormativeAssessment,
   LearningChapter,
+  LearningObjective,
   SaveOperationResult,
   Student,
   Subject,
@@ -55,6 +56,7 @@ import {
   normalizeAcademicYearValue,
   normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
+import { filterObjectivesForContext } from '../utils/tpAnalysisAndDescription';
 import {
   buildGuardedSpreadsheetSavePayloads,
   buildSpreadsheetColumns,
@@ -79,6 +81,7 @@ interface PengolahanNilaiTabelViewProps {
   curricula: Curriculum[];
   teachers: Teacher[];
   teachingAssignments: TeachingAssignment[];
+  learningObjectives?: LearningObjective[];
   learningChapters: LearningChapter[];
   summativePlans: SummativeAssessmentPlan[];
   summativeAssessments: SummativeAssessment[];
@@ -111,6 +114,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
   curricula,
   teachers,
   teachingAssignments,
+  learningObjectives = [],
   learningChapters,
   summativePlans,
   summativeAssessments,
@@ -271,6 +275,16 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
       semester: selectedSemester
     });
   }, [summativePlans, selectedSubjectId, selectedClassId, selectedYear, selectedSemester]);
+
+  const relevantTPs = useMemo(() => {
+    if (!selectedSubjectId) return [];
+    return filterObjectivesForContext(learningObjectives, {
+      subjectId: selectedSubjectId,
+      gradeLevel: selectedClassroom?.gradeLevel,
+      semester: selectedSemester,
+      academicYear: selectedYear
+    });
+  }, [learningObjectives, selectedSubjectId, selectedClassroom?.gradeLevel, selectedSemester, selectedYear]);
 
   const columns = useMemo(
     () => buildSpreadsheetColumns({ chapters: contextChapters, plans: contextPlans }),
@@ -1730,16 +1744,20 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         {(() => {
                           const kktpMap = row.existingScore?.formatifKktpScores || {};
                           const showMap = row.existingScore?.formatifShowScores || {};
-                          const kktpKeys = Object.keys(kktpMap);
-                          if (kktpKeys.length === 0) {
+                          const activeKeys =
+                            relevantTPs.length > 0
+                              ? relevantTPs.map((tp) => tp.id).filter((id) => kktpMap[id] !== undefined)
+                              : Object.keys(kktpMap);
+                          if (activeKeys.length === 0) {
                             return <span className="text-[10px] text-slate-400">Belum diisi</span>;
                           }
-                          const tercapai = kktpKeys.filter((k) => kktpMap[k] === 1).length;
-                          const tampil = kktpKeys.filter((k) => (showMap[k] ?? 1) === 1).length;
+                          const tercapai = activeKeys.filter((k) => kktpMap[k] === 1).length;
+                          const tampil = activeKeys.filter((k) => (showMap[k] ?? 1) === 1).length;
+                          const totalTarget = relevantTPs.length > 0 ? relevantTPs.length : activeKeys.length;
                           return (
                             <div className="leading-tight">
                               <div className="font-bold text-[11px] text-teal-900">
-                                {tercapai}/{kktpKeys.length} TP
+                                {tercapai}/{totalTarget} TP
                               </div>
                               <div className="text-[10px] text-teal-700">{tampil} tampil</div>
                             </div>

@@ -199,6 +199,7 @@ export function aggregateChapterScoresFromSummatives(params: {
   chapters: LearningChapter[];
   summativeAssessments: SummativeAssessment[];
   existingChapterScores?: Record<string, number>;
+  existingScoreUpdatedAt?: string;
 }): Record<string, number> {
   const targetYear = normalizeAcademicYearValue(params.academicYear);
   const targetSem = normalizeSemesterValue(params.semester);
@@ -213,26 +214,56 @@ export function aggregateChapterScoresFromSummatives(params: {
       Boolean(sa.chapterId)
   );
 
-  const grouped: Record<string, number[]> = {};
+  const planGrouped: Record<string, number[]> = {};
+  const directGrouped: Record<string, number[]> = {};
+  const latestDirectUpdatedAt: Record<string, string> = {};
+
   studentSummatives.forEach((sa) => {
     const chId = sa.chapterId!;
-    if (!grouped[chId]) grouped[chId] = [];
-    if (typeof sa.score === 'number' && Number.isFinite(sa.score)) {
-      grouped[chId].push(clampScore0To100(sa.score));
+    if (typeof sa.score !== 'number' || !Number.isFinite(sa.score)) return;
+    const clamped = clampScore0To100(sa.score);
+    if (sa.planId) {
+      if (!planGrouped[chId]) planGrouped[chId] = [];
+      planGrouped[chId].push(clamped);
+    } else {
+      if (!directGrouped[chId]) directGrouped[chId] = [];
+      directGrouped[chId].push(clamped);
+      const saTs = String(sa.updatedAt || sa.date || '');
+      if (!latestDirectUpdatedAt[chId] || saTs > latestDirectUpdatedAt[chId]) {
+        latestDirectUpdatedAt[chId] = saTs;
+      }
     }
   });
 
   const result: Record<string, number> = {};
+  const scoreUpdatedAt = String(params.existingScoreUpdatedAt || '');
+
   params.chapters.forEach((ch) => {
-    const vals = grouped[ch.id];
-    if (vals && vals.length > 0) {
-      result[ch.id] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-    } else if (
-      params.existingChapterScores &&
-      typeof params.existingChapterScores[ch.id] === 'number' &&
-      Number.isFinite(params.existingChapterScores[ch.id])
-    ) {
-      result[ch.id] = clampScore0To100(params.existingChapterScores[ch.id]);
+    const planVals = planGrouped[ch.id];
+    if (planVals && planVals.length > 0) {
+      result[ch.id] = Math.round((planVals.reduce((a, b) => a + b, 0) / planVals.length) * 100) / 100;
+      return;
+    }
+
+    const existingVal = params.existingChapterScores?.[ch.id];
+    const hasExistingVal = typeof existingVal === 'number' && Number.isFinite(existingVal);
+    const directVals = directGrouped[ch.id];
+    const hasDirectVals = Boolean(directVals && directVals.length > 0);
+    const directTs = latestDirectUpdatedAt[ch.id] || '';
+
+    // If AssessmentScore was updated strictly more recently than any stale direct sa-bab record,
+    // treat existingChapterScores as authoritative (including intentional clears).
+    if (scoreUpdatedAt && hasDirectVals && scoreUpdatedAt > directTs) {
+      if (hasExistingVal) {
+        result[ch.id] = clampScore0To100(existingVal!);
+      }
+      return;
+    }
+
+    if (hasDirectVals) {
+      result[ch.id] = Math.round((directVals.reduce((a, b) => a + b, 0) / directVals.length) * 100) / 100;
+    } else if (hasExistingVal) {
+      result[ch.id] = clampScore0To100(existingVal!);
     }
   });
 

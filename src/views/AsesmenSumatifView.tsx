@@ -34,6 +34,8 @@ import {
   buildDeterministicScoreId,
   computeStudentReportScore,
   filterChaptersForContext,
+  formatScoreDecimal,
+  getEffectiveSasScore,
   getNextChapterOrderAndCode,
   buildLearningChapterId,
   clampScore0To100
@@ -42,7 +44,11 @@ import {
   authorizeSubjectAssessmentWrite,
   getAuthorizedSubjectClassIds
 } from '../utils/authorizationGuard';
-import { normalizeAcademicYearValue, normalizeSemesterValue } from '../utils/electiveSubjectHelper';
+import {
+  isStudentParticipatingInSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 interface AsesmenSumatifViewProps {
   classrooms: Classroom[];
@@ -195,8 +201,29 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
   const classStudents = useMemo(() => {
     if (!selectedClassId) return [];
     const list = students.filter((s) => s.classId === selectedClassId && s.status === 'Aktif');
-    return sortStudentsAlphabetically(list);
-  }, [students, selectedClassId]);
+    const participating = selectedSubject
+      ? list.filter((st) =>
+          isStudentParticipatingInSubject({
+            studentId: st.id,
+            subject: selectedSubject,
+            classId: selectedClassId,
+            academicYear: selectedYear,
+            semester: selectedSemester,
+            teachingAssignments,
+            scores
+          })
+        )
+      : list;
+    return sortStudentsAlphabetically(participating);
+  }, [
+    students,
+    selectedClassId,
+    selectedSubject,
+    selectedYear,
+    selectedSemester,
+    teachingAssignments,
+    scores
+  ]);
 
   const contextChapters = useMemo(() => {
     if (!selectedSubjectId || !selectedClassroom) return [];
@@ -246,8 +273,32 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
         sScores[k] = v !== undefined && v !== null ? String(v) : '';
       });
       scopeMap[std.id] = sScores;
-      nonTesMap[std.id] = existing?.sasNonTes !== undefined ? String(existing.sasNonTes) : '';
-      tesMap[std.id] = existing?.sasTes !== undefined ? String(existing.sasTes) : '';
+
+      const effectiveSas = getEffectiveSasScore(existing);
+      if (effectiveSas === undefined) {
+        nonTesMap[std.id] = '';
+        tesMap[std.id] = '';
+      } else {
+        const hasNonTes = typeof existing?.sasNonTes === 'number' && Number.isFinite(existing.sasNonTes);
+        const hasTes = typeof existing?.sasTes === 'number' && Number.isFinite(existing.sasTes);
+        let derivedFromParts: number | undefined;
+        if (hasNonTes && hasTes) {
+          derivedFromParts = Math.round(((existing!.sasNonTes! + existing!.sasTes!) / 2) * 100) / 100;
+        } else if (hasNonTes) {
+          derivedFromParts = existing!.sasNonTes!;
+        } else if (hasTes) {
+          derivedFromParts = existing!.sasTes!;
+        }
+
+        if (derivedFromParts !== undefined && Math.abs(derivedFromParts - effectiveSas) < 0.05) {
+          nonTesMap[std.id] = hasNonTes ? String(existing!.sasNonTes) : '';
+          tesMap[std.id] = hasTes ? String(existing!.sasTes) : '';
+        } else {
+          // SAS was entered/updated directly as a single value in InputNilai/PengolahanNilaiTabel
+          nonTesMap[std.id] = '';
+          tesMap[std.id] = String(effectiveSas);
+        }
+      }
     });
 
     setLocalScopeScores(scopeMap);
@@ -323,7 +374,10 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
       const targetYear = normalizeAcademicYearValue(selectedYear);
       const targetSem = normalizeSemesterValue(selectedSemester);
 
-      const scoresToSave: AssessmentScore[] = classStudents.map((std) => {
+      const scoresToSave: AssessmentScore[] = [];
+      let skippedLockedCount = 0;
+
+      classStudents.forEach((std) => {
         const existing = scores.find(
           (sc) =>
             sc.studentId === std.id &&
@@ -331,6 +385,11 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
             normalizeAcademicYearValue(sc.academicYear) === targetYear &&
             normalizeSemesterValue(sc.semester) === targetSem
         );
+
+        if (existing?.status === 'TERKUNCI') {
+          skippedLockedCount++;
+          return;
+        }
 
         const studentScopes = localScopeScores[std.id] || {};
         const parsedScopeScores: Record<string, number> = {};
@@ -374,6 +433,11 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
           naSasNum = tesNum;
         }
 
+        const hasAnyInput = Object.keys(parsedScopeScores).length > 0 || naSasNum !== undefined;
+        if (!existing && !hasAnyInput) {
+          return;
+        }
+
         const calc = computeStudentReportScore({
           chapters: contextChapters,
           chapterScores: parsedScopeScores,
@@ -385,7 +449,7 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
 
         const id = existing?.id || buildDeterministicScoreId(std.id, selectedSubjectId, selectedYear, selectedSemester);
 
-        return {
+        scoresToSave.push({
           ...(existing || {}),
           id,
           studentId: std.id,
@@ -406,24 +470,35 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
           sasNonTes: nonTesNum,
           sasTes: tesNum,
           naSas: naSasNum,
-          finalScore: calc.finalScore ?? existing?.finalScore ?? 0,
-          rawFinalScore: calc.rawFinalScore ?? existing?.rawFinalScore,
-          predicate: calc.predicate ?? existing?.predicate ?? 'D',
+          finalScore: calc.finalScore ?? existing?.manualFinalScore ?? 0,
+          rawFinalScore: calc.rawFinalScore,
+          predicate: calc.predicate ?? 'D',
           completenessStatus: calc.completenessStatus,
           hasMissingComponents: calc.hasMissingComponents,
           missingComponentNote: calc.missingComponentNote,
           finalScoreBreakdown: calc.breakdownText,
-          status: existing?.status === 'TERKUNCI' ? 'TERKUNCI' : 'SELESAI',
+          status: 'SELESAI',
           updatedAt: new Date().toISOString(),
           updatedBy: currentUser.name,
           updatedById: currentUser.id
-        } as AssessmentScore;
+        } as AssessmentScore);
       });
+
+      if (scoresToSave.length === 0) {
+        setFeedbackBanner({
+          type: 'warning',
+          text:
+            skippedLockedCount > 0
+              ? `Semua nilai siswa (${skippedLockedCount}) berstatus TERKUNCI dan dilindungi.`
+              : 'Belum ada nilai lingkup materi atau SAS yang diisi untuk disimpan.'
+        });
+        return;
+      }
 
       onSaveScores(scoresToSave, {
         id: `notif-${Date.now()}`,
         title: 'Asesmen Sumatif Disimpan',
-        message: `Nilai sumatif & SAS untuk ${classStudents.length} siswa berhasil disimpan.`,
+        message: `Nilai sumatif & SAS untuk ${scoresToSave.length} siswa berhasil disimpan.`,
         createdAt: new Date().toISOString(),
         classId: selectedClassId,
         subjectId: selectedSubjectId,
@@ -431,8 +506,10 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
       });
 
       setFeedbackBanner({
-        type: 'success',
-        text: `Berhasil menyimpan asesmen sumatif untuk ${classStudents.length} siswa.`
+        type: skippedLockedCount > 0 ? 'warning' : 'success',
+        text: `Berhasil menyimpan asesmen sumatif untuk ${scoresToSave.length} siswa.${
+          skippedLockedCount > 0 ? ` (${skippedLockedCount} siswa terkunci dilewati).` : ''
+        }`
       });
     } catch (err: any) {
       setFeedbackBanner({
@@ -671,7 +748,7 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
 
                   const naLingkup =
                     scopeValues.length > 0
-                      ? Math.round((scopeValues.reduce((a, b) => a + b, 0) / scopeValues.length) * 1000) / 1000
+                      ? Math.round((scopeValues.reduce((a, b) => a + b, 0) / scopeValues.length) * 100) / 100
                       : undefined;
 
                   const rawNonTes = localSasNonTes[std.id] || '';
@@ -685,7 +762,7 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
 
                   let naSas: number | undefined = undefined;
                   if (nonTesNum !== undefined && tesNum !== undefined) {
-                    naSas = Math.round(((nonTesNum + tesNum) / 2) * 1000) / 1000;
+                    naSas = Math.round(((nonTesNum + tesNum) / 2) * 100) / 100;
                   } else if (nonTesNum !== undefined) {
                     naSas = nonTesNum;
                   } else if (tesNum !== undefined) {
@@ -736,7 +813,7 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
                         ))
                       )}
                       <td className="py-2 px-2 text-center font-extrabold text-emerald-900 bg-emerald-50/60 border border-slate-300">
-                        {naLingkup !== undefined ? naLingkup.toLocaleString('id-ID', { maximumFractionDigits: 3 }) : '-'}
+                        {naLingkup !== undefined ? formatScoreDecimal(naLingkup) : '-'}
                       </td>
                       <td className="py-1.5 px-2 text-center border border-slate-300 bg-sky-50/30">
                         <input
@@ -763,7 +840,7 @@ export const AsesmenSumatifView: React.FC<AsesmenSumatifViewProps> = ({
                         />
                       </td>
                       <td className="py-2 px-2 text-center font-bold text-slate-700 bg-slate-50 border border-slate-300">
-                        {naSas !== undefined ? naSas.toLocaleString('id-ID', { maximumFractionDigits: 3 }) : '-'}
+                        {naSas !== undefined ? formatScoreDecimal(naSas) : '-'}
                       </td>
                       <td className="py-2 px-2 text-center font-black text-emerald-950 bg-emerald-100/70 border border-slate-300">
                         {calc.finalScore !== undefined ? calc.finalScore : '-'}

@@ -85,7 +85,8 @@ export function buildReportScoreExcelWorkbook(params: ReportScoreExcelTemplatePa
       semester,
       chapters,
       summativeAssessments,
-      existingChapterScores: existing?.chapterScores
+      existingChapterScores: existing?.chapterScores,
+      existingScoreUpdatedAt: existing?.updatedAt
     });
 
     const sasScore = getEffectiveSasScore(existing);

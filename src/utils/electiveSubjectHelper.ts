@@ -111,6 +111,30 @@ export function hasEnteredAssessmentScore(sc?: AssessmentScore | null): boolean 
   return false;
 }
 
+/**
+ * Determines whether an AssessmentScore record contains an actual numeric report grade
+ * (including intentional 0 in Sumatif/SAS/Manual), excluding ungraded Formatives-only placeholders
+ * where finalScore defaults to 0 solely to satisfy Firestore numeric rules.
+ */
+export function hasEnteredNumericScore(sc?: AssessmentScore | null): boolean {
+  if (!sc) return false;
+  if (typeof sc.manualFinalScore === 'number' && Number.isFinite(sc.manualFinalScore)) {
+    return true;
+  }
+  if (sc.hasSasScore === true) return true;
+  if (sc.chapterScores && Object.keys(sc.chapterScores).length > 0) return true;
+  if (typeof sc.sumatifAverage === 'number' && Number.isFinite(sc.sumatifAverage)) {
+    return true;
+  }
+  if (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0) {
+    return true;
+  }
+  if (typeof sc.finalScore === 'number' && Number.isFinite(sc.finalScore) && sc.finalScore > 0) {
+    return true;
+  }
+  return false;
+}
+
 export function normalizeAcademicYearValue(year?: string | null): string {
   return String(year || '')
     .trim()
@@ -363,7 +387,7 @@ export function getElectiveHistoryRows(params: {
     (sc) =>
       sc.studentId === student.id &&
       electiveSubjectsMap.has(sc.subjectId) &&
-      hasEnteredAssessmentScore(sc)
+      hasEnteredNumericScore(sc)
   );
 
   // Deduplicate by subject + academicYear + semester keeping latest updatedAt
@@ -488,7 +512,8 @@ export function buildReportGradeRows(params: {
       };
     }
 
-    const rawScore = sc?.manualFinalScore ?? sc?.finalScore;
+    const hasNumeric = hasEnteredNumericScore(sc);
+    const rawScore = hasNumeric ? sc?.manualFinalScore ?? sc?.finalScore : undefined;
     const finalScoreText = rawScore !== undefined ? String(rawScore) : '-';
     const competenceDisplay = resolveRaporCompetenceDisplay(sc);
 

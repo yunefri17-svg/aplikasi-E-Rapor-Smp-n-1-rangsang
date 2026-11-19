@@ -48,6 +48,7 @@ import { resolveStudentExtracurricularRows } from '../utils/extracurricularRepor
 import {
   getReportSubjectsForStudent,
   hasEnteredAssessmentScore,
+  hasEnteredNumericScore,
   isElectiveSubject,
   normalizeAcademicYearValue,
   normalizeSemesterValue
@@ -205,7 +206,7 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
 
   // Check completeness for data verification notice
   const missingSubjects = studentReportSubjects.filter(
-    (sub) => !scoreLookup.has(sub.id) || (isElectiveSubject(sub) && !hasEnteredAssessmentScore(scoreLookup.get(sub.id)))
+    (sub) => !scoreLookup.has(sub.id) || !hasEnteredNumericScore(scoreLookup.get(sub.id))
   );
   const incompleteDescSubjects = studentReportSubjects.filter((sub) => {
     const sc = scoreLookup.get(sub.id);
@@ -977,7 +978,9 @@ export const CetakRaporView: React.FC<CetakRaporViewProps> = ({
                   {studentReportSubjects.map((sub, idx) => {
                     const sc = scoreLookup.get(sub.id);
                     const isElectiveEmpty = isElectiveSubject(sub) && !hasEnteredAssessmentScore(sc);
-                    const rawScoreVal = sc?.manualFinalScore ?? sc?.finalScore;
+                    const rawScoreVal = hasEnteredNumericScore(sc)
+                      ? (sc?.manualFinalScore ?? sc?.finalScore)
+                      : undefined;
                     const finalVal = isElectiveEmpty ? '' : rawScoreVal !== undefined ? rawScoreVal : '-';
                     const display = isElectiveEmpty ? null : resolveRaporCompetenceDisplay(sc);
 

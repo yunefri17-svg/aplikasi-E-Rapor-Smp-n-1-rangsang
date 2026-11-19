@@ -49,7 +49,13 @@ import {
 } from '../utils/tpAnalysisAndDescription';
 import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
 import { sortClassrooms } from '../utils/classroomSort';
-import { normalizeAcademicYearValue, normalizeSemesterValue } from '../utils/electiveSubjectHelper';
+import { sortStudentsAlphabetically } from '../utils/studentSort';
+import {
+  hasEnteredNumericScore,
+  isStudentParticipatingInSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 interface PengolahanNilaiAkhirViewProps {
   classrooms: Classroom[];
@@ -151,9 +157,39 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
     [classrooms, selectedClassId]
   );
 
+  const selectedSubject = useMemo(
+    () => subjects.find((s) => s.id === selectedSubjectId),
+    [subjects, selectedSubjectId]
+  );
+
   const filteredStudents = useMemo(() => {
-    return getAccessibleStudents(currentUser, students, selectedClassId);
-  }, [currentUser, students, selectedClassId]);
+    const active = getAccessibleStudents(currentUser, students, selectedClassId).filter(
+      (s) => s.status === 'Aktif'
+    );
+    const participating = selectedSubject
+      ? active.filter((st) =>
+          isStudentParticipatingInSubject({
+            studentId: st.id,
+            subject: selectedSubject,
+            classId: selectedClassId,
+            academicYear,
+            semester,
+            teachingAssignments,
+            scores
+          })
+        )
+      : active;
+    return sortStudentsAlphabetically(participating);
+  }, [
+    currentUser,
+    students,
+    selectedClassId,
+    selectedSubject,
+    academicYear,
+    semester,
+    teachingAssignments,
+    scores
+  ]);
 
   const relevantObjectives = useMemo(() => {
     return filterObjectivesForContext(learningObjectives, {
@@ -183,6 +219,77 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
       semester
     });
   }, [learningChapters, selectedSubjectId, selectedClassId, academicYear, semester]);
+
+  const classUseChapters = useMemo(() => {
+    if (contextChapters.length === 0) return false;
+    const targetNormYear = normalizeAcademicYearValue(academicYear);
+    const targetNormSem = normalizeSemesterValue(semester);
+
+    const anyChapSum = filteredStudents.some((std) => {
+      const ex = scores.find(
+        (s) =>
+          s.studentId === std.id &&
+          s.subjectId === selectedSubjectId &&
+          (s.classId === selectedClassId || !s.classId) &&
+          normalizeAcademicYearValue(s.academicYear) === targetNormYear &&
+          normalizeSemesterValue(s.semester) === targetNormSem
+      );
+      if (
+        contextChapters.some(
+          (ch) =>
+            typeof ex?.chapterScores?.[ch.id] === 'number' ||
+            typeof ex?.sumatifMateriScores?.[ch.id] === 'number'
+        )
+      ) {
+        return true;
+      }
+      return summativeAssessments.some(
+        (sa) =>
+          sa.studentId === std.id &&
+          sa.subjectId === selectedSubjectId &&
+          normalizeAcademicYearValue(sa.academicYear) === targetNormYear &&
+          normalizeSemesterValue(sa.semester) === targetNormSem &&
+          Boolean(sa.chapterId && contextChapters.some((ch) => ch.id === sa.chapterId))
+      );
+    });
+
+    if (anyChapSum) return true;
+
+    const anyTpSum = filteredStudents.some((std) => {
+      const ex = scores.find(
+        (s) =>
+          s.studentId === std.id &&
+          s.subjectId === selectedSubjectId &&
+          (s.classId === selectedClassId || !s.classId) &&
+          normalizeAcademicYearValue(s.academicYear) === targetNormYear &&
+          normalizeSemesterValue(s.semester) === targetNormSem
+      );
+      if (relevantObjectives.some((tp) => typeof ex?.sumatifMateriScores?.[tp.id] === 'number')) {
+        return true;
+      }
+      return summativeAssessments.some(
+        (sa) =>
+          sa.studentId === std.id &&
+          sa.subjectId === selectedSubjectId &&
+          normalizeAcademicYearValue(sa.academicYear) === targetNormYear &&
+          normalizeSemesterValue(sa.semester) === targetNormSem &&
+          !sa.chapterId &&
+          getSummativeTpIds(sa).some((id) => relevantObjectives.some((tp) => tp.id === id))
+      );
+    });
+
+    return !anyTpSum;
+  }, [
+    contextChapters,
+    relevantObjectives,
+    filteredStudents,
+    scores,
+    summativeAssessments,
+    selectedSubjectId,
+    selectedClassId,
+    academicYear,
+    semester
+  ]);
 
   // 3. Calculation Logic (preserving school formulas + multi-TP / chapter Lingkup Materi + automated TP description)
   const computedData = useMemo(() => {
@@ -240,13 +347,12 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
               semester,
               chapters: contextChapters,
               summativeAssessments,
-              existingChapterScores: existing?.chapterScores
+              existingChapterScores: existing?.chapterScores,
+              existingScoreUpdatedAt: existing?.updatedAt
             })
           : existing?.chapterScores || {};
 
-      const hasTpScores = Object.keys(tpAverages).length > 0;
-      const hasChapterScores = Object.keys(chapterScores).length > 0;
-      const useChapters = contextChapters.length > 0 && (hasChapterScores || !hasTpScores);
+      const useChapters = classUseChapters;
 
       const effectiveChapters: LearningChapter[] = useChapters
         ? contextChapters
@@ -273,7 +379,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         formatifScores: existing?.formatifScores,
         manualFinalScore: existing?.manualFinalScore,
         passingCriteria,
-        legacyMateriScores: useChapters ? chapterScores : tpAverages
+        legacyMateriScores: useChapters ? {} : tpAverages
       });
 
       const effectiveFinalScore = calcResult.finalScore;
@@ -292,7 +398,9 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           ? {
               ...existing,
               chapterScores,
-              sumatifMateriScores: { ...(existing.sumatifMateriScores || {}), ...chapterScores, ...tpAverages }
+              sumatifMateriScores: useChapters
+                ? { ...(existing.sumatifMateriScores || {}), ...chapterScores }
+                : { ...(existing.sumatifMateriScores || {}), ...chapterScores, ...tpAverages }
             }
           : Object.keys(tpAverages).length > 0 || Object.keys(chapterScores).length > 0
           ? ({
@@ -324,12 +432,16 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         tpAverages,
         chapterScores,
         calcResult,
-        hasAnyScore:
-          Object.keys(tpAverages).length > 0 ||
-          Object.keys(chapterScores).length > 0 ||
-          sasVal !== undefined ||
-          existing?.manualFinalScore !== undefined ||
-          Boolean(existing),
+        hasAnyScore: useChapters
+          ? Object.keys(chapterScores).length > 0 ||
+            sasVal !== undefined ||
+            existing?.manualFinalScore !== undefined ||
+            hasEnteredNumericScore(existing)
+          : Object.keys(tpAverages).length > 0 ||
+            Object.keys(chapterScores).length > 0 ||
+            sasVal !== undefined ||
+            existing?.manualFinalScore !== undefined ||
+            hasEnteredNumericScore(existing),
         finalScore: effectiveFinalScore,
         analysis,
         composed,
@@ -349,6 +461,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
     summativeAssessments,
     relevantObjectives,
     contextChapters,
+    classUseChapters,
     currentConfig,
     learningObjectives,
     formativeAssessments,
@@ -660,9 +773,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
 
       {/* Main Calculation Table */}
       {(() => {
-        const anyTpScores = computedData.some((item) => Object.keys(item.tpAverages).length > 0);
-        const anyChapScores = computedData.some((item) => Object.keys(item.chapterScores).length > 0);
-        const useChapCols = contextChapters.length > 0 && (anyChapScores || !anyTpScores);
+        const useChapCols = classUseChapters;
         const displayCols = useChapCols
           ? contextChapters.map((ch) => ({ id: ch.id, code: ch.code, label: 'Lingkup Materi' }))
           : relevantObjectives.map((tp) => ({ id: tp.id, code: tp.code, label: 'Sumatif TP' }));
