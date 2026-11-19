@@ -5,7 +5,12 @@ import { exportLegerToExcel } from '../services/excelService';
 import { generateLegerPDF } from '../services/pdfService';
 import { SecurityAccessDenied } from '../components/SecurityAccessDenied';
 import { sortClassrooms } from '../utils/classroomSort';
-import { getSubjectsForClassPeriod } from '../utils/electiveSubjectHelper';
+import {
+  getSubjectsForClassPeriod,
+  hasEnteredAssessmentScore,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 interface LegerNilaiViewProps {
   school: SchoolProfile;
@@ -69,12 +74,24 @@ export const LegerNilaiView: React.FC<LegerNilaiViewProps> = ({
     classStudentIds: classStudents.map((s) => s.id)
   });
 
-  // Score matrix lookup: studentId -> subjectId -> finalScore
+  // Score matrix lookup: studentId -> subjectId -> finalScore (aligned with Cetak Rapor)
+  const normYear = normalizeAcademicYearValue(academicYear);
+  const normSem = normalizeSemesterValue(semester);
+  const classStudentIdSet = new Set(classStudents.map((s) => s.id));
   const scoreMap = new Map<string, Map<string, number>>();
   scores.forEach((sc) => {
-    if (sc.classId === selectedClass && sc.semester === semester && sc.academicYear === academicYear) {
-      if (!scoreMap.has(sc.studentId)) scoreMap.set(sc.studentId, new Map());
-      scoreMap.get(sc.studentId)!.set(sc.subjectId, sc.finalScore);
+    if (
+      (sc.classId === selectedClass || classStudentIdSet.has(sc.studentId)) &&
+      normalizeSemesterValue(sc.semester) === normSem &&
+      normalizeAcademicYearValue(sc.academicYear) === normYear &&
+      (hasEnteredAssessmentScore(sc) ||
+        (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0))
+    ) {
+      const resolvedVal = sc.manualFinalScore ?? sc.finalScore;
+      if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
+        if (!scoreMap.has(sc.studentId)) scoreMap.set(sc.studentId, new Map());
+        scoreMap.get(sc.studentId)!.set(sc.subjectId, resolvedVal);
+      }
     }
   });
 

@@ -20,6 +20,11 @@ import {
   mapNumericCodeToLevel
 } from '../utils/kokurikulerHelper';
 import { normalizeDateToIso } from '../utils/dateFormat';
+import {
+  hasEnteredAssessmentScore,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
+} from '../utils/electiveSubjectHelper';
 
 // 1. Export Students to Excel
 export const exportStudentsToExcel = (
@@ -216,14 +221,26 @@ export const exportLegerToExcel = (
   academicYear: string,
   semester: string
 ) => {
-  // Build a 2D lookup: studentId -> subjectId -> finalScore
+  // Build a 2D lookup: studentId -> subjectId -> finalScore (aligned with Cetak Rapor)
+  const normYear = normalizeAcademicYearValue(academicYear);
+  const normSem = normalizeSemesterValue(semester);
+  const classStudentIdSet = new Set(students.map((s) => s.id));
   const scoreMap = new Map<string, Map<string, number>>();
   scores.forEach((sc) => {
-    if (sc.classId === classroom.id && sc.semester === semester && sc.academicYear === academicYear) {
-      if (!scoreMap.has(sc.studentId)) {
-        scoreMap.set(sc.studentId, new Map());
+    if (
+      (sc.classId === classroom.id || classStudentIdSet.has(sc.studentId)) &&
+      normalizeSemesterValue(sc.semester) === normSem &&
+      normalizeAcademicYearValue(sc.academicYear) === normYear &&
+      (hasEnteredAssessmentScore(sc) ||
+        (sc.sumatifMateriScores && Object.keys(sc.sumatifMateriScores).length > 0))
+    ) {
+      const resolvedVal = sc.manualFinalScore ?? sc.finalScore;
+      if (typeof resolvedVal === 'number' && Number.isFinite(resolvedVal)) {
+        if (!scoreMap.has(sc.studentId)) {
+          scoreMap.set(sc.studentId, new Map());
+        }
+        scoreMap.get(sc.studentId)!.set(sc.subjectId, resolvedVal);
       }
-      scoreMap.get(sc.studentId)!.set(sc.subjectId, sc.finalScore);
     }
   });
 

@@ -346,25 +346,6 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
           summativeAssessments
         });
 
-        // If existingScore doesn't yet have formatifValue, hydrate from formativeAssessments (without double-counting)
-        if (!initialEdit.formatifValue && formativeAssessments.length > 0) {
-          const fmtScores = formativeAssessments
-            .filter(
-              (fa) =>
-                fa.studentId === std.id &&
-                fa.subjectId === selectedSubjectId &&
-                normalizeAcademicYearValue(fa.academicYear) === targetNormYear &&
-                normalizeSemesterValue(fa.semester) === targetNormSem &&
-                typeof fa.score === 'number' &&
-                Number.isFinite(fa.score)
-            )
-            .map((fa) => fa.score as number);
-          const avgRes = calculateFormativeAverage(fmtScores);
-          if (avgRes.average !== undefined) {
-            initialEdit.formatifValue = String(avgRes.average);
-          }
-        }
-
         next[std.id] = initialEdit;
       });
       return next;
@@ -423,7 +404,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     currentUser
   ]);
 
-  const totalColCount = 1 + columns.length + 1 + (showManualColumn ? 1 : 0);
+  const totalColCount = columns.length + 1 + (showManualColumn ? 1 : 0);
 
   const updateStudentCell = (
     studentId: string,
@@ -535,16 +516,13 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
         pRow.forEach((numVal, cOffset) => {
           const targetColIdx = startColIdx + cOffset;
           const strVal = numVal !== undefined ? String(numVal) : '';
-          if (targetColIdx === 0) {
-            updatedFormatif = strVal;
+          if (targetColIdx >= 0 && targetColIdx < columns.length) {
+            updatedCellValues[columns[targetColIdx].key] = strVal;
             appliedCells++;
-          } else if (targetColIdx >= 1 && targetColIdx <= columns.length) {
-            updatedCellValues[columns[targetColIdx - 1].key] = strVal;
-            appliedCells++;
-          } else if (targetColIdx === columns.length + 1) {
+          } else if (targetColIdx === columns.length) {
             updatedSas = strVal;
             appliedCells++;
-          } else if (showManualColumn && targetColIdx === columns.length + 2) {
+          } else if (showManualColumn && targetColIdx === columns.length + 1) {
             updatedManual = strVal;
             appliedCells++;
           }
@@ -913,7 +891,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
       'NIS',
       'NISN',
       'NAMA_SISWA',
-      'NILAI_FORMATIF',
+      'REKAP_FORMATIF_KKTP',
       ...columns.map((c) => (c.subLabel ? `${c.label} (${c.subLabel})` : c.label)),
       'NILAI_SAS',
       'RATA_SUMATIF',
@@ -927,7 +905,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
       [`PENGOLAHAN NILAI SISWA - ${schoolName.toUpperCase()}`],
       ['MAPEL', selectedSubject.name, 'ROMBEL', selectedClassroom.name],
       ['TAHUN_AJARAN', selectedYear, 'SEMESTER', selectedSemester],
-      ['RUMUS_AKTIF', weights.formulaLabel, 'KKM', passingCriteria],
+      ['MODEL_PENILAIAN', weights.formulaLabel, 'KKM', passingCriteria],
       [],
       header
     ];
@@ -939,12 +917,18 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
         manualFinalValue: '',
         formatifValue: ''
       };
+      const kktpMap = row.existingScore?.formatifKktpScores || {};
+      const kktpKeys = Object.keys(kktpMap);
+      const kktpSummary =
+        kktpKeys.length > 0
+          ? `${kktpKeys.filter((k) => kktpMap[k] === 1).length}/${kktpKeys.length} TP`
+          : '-';
       aoa.push([
         idx + 1,
         row.student.nis || '',
         row.student.nisn || '',
         row.student.name,
-        row.formatifAverage !== undefined ? row.formatifAverage : '',
+        kktpSummary,
         ...columns.map((c) => {
           const parsed = parseNumericScoreInput(edit.cellValues[c.key] ?? '');
           return parsed.value !== undefined ? parsed.value : '';
@@ -1646,10 +1630,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                 <th className="border border-slate-300 px-3 py-2.5 text-left min-w-[210px] bg-slate-100 sticky left-10 z-30">
                   Nama Peserta Didik
                 </th>
-                <th className="border border-slate-300 px-2 py-2 text-center min-w-[95px] bg-teal-50 text-teal-900">
-                  Formatif
+                <th className="border border-slate-300 px-2 py-2 text-center min-w-[105px] bg-teal-50 text-teal-900">
+                  Rekap Formatif
                   <div className="text-[10px] font-normal text-teal-700">
-                    ({weights.formatifWeightPercent}%)
+                    KKTP (0/1) &amp; Tampil
                   </div>
                 </th>
                 {columns.map((col) => (
@@ -1668,13 +1652,13 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                 <th className="border border-slate-300 px-2 py-2 text-center min-w-[90px] bg-indigo-50 text-indigo-900">
                   Nilai SAS
                   <div className="text-[10px] font-normal text-indigo-700">
-                    Komponen
+                    Tidak Wajib
                   </div>
                 </th>
-                <th className="border border-slate-300 px-2.5 py-2 text-center min-w-[95px] bg-sky-50 text-sky-900">
+                <th className="border border-slate-300 px-2.5 py-2 text-center min-w-[105px] bg-sky-50 text-sky-900">
                   Rata-rata Sumatif
                   <div className="text-[10px] font-normal text-sky-700">
-                    ({weights.sumatifWeightPercent}%)
+                    Materi + SAS
                   </div>
                 </th>
                 {showManualColumn && (
@@ -1741,27 +1725,24 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         </div>
                       </td>
 
-                      {/* Nilai Formatif (50%) */}
-                      <td className="border border-slate-300 p-0 bg-teal-50/20">
+                      {/* Rekap Formatif (KKTP 0/1 & Tampil, tidak masuk pembobotan angka) */}
+                      <td className="border border-slate-300 px-2 py-1.5 text-center bg-teal-50/20">
                         {(() => {
-                          const fmtCheck = parseNumericScoreInput(edit.formatifValue ?? '');
+                          const kktpMap = row.existingScore?.formatifKktpScores || {};
+                          const showMap = row.existingScore?.formatifShowScores || {};
+                          const kktpKeys = Object.keys(kktpMap);
+                          if (kktpKeys.length === 0) {
+                            return <span className="text-[10px] text-slate-400">Belum diisi</span>;
+                          }
+                          const tercapai = kktpKeys.filter((k) => kktpMap[k] === 1).length;
+                          const tampil = kktpKeys.filter((k) => (showMap[k] ?? 1) === 1).length;
                           return (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              data-cell={`${rowIdx}:0`}
-                              disabled={rowLocked}
-                              value={edit.formatifValue ?? ''}
-                              placeholder="-"
-                              onChange={(e) =>
-                                updateStudentCell(std.id, { kind: 'formatif' }, e.target.value)
-                              }
-                              onKeyDown={(e) => handleCellKeyDown(e, rowIdx, 0)}
-                              onPaste={(e) => handleCellPaste(e, rowIdx, 0)}
-                              className={`w-full h-9 px-2 text-center font-bold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 disabled:bg-slate-100 disabled:text-slate-500 ${
-                                fmtCheck.error ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500' : ''
-                              }`}
-                            />
+                            <div className="leading-tight">
+                              <div className="font-bold text-[11px] text-teal-900">
+                                {tercapai}/{kktpKeys.length} TP
+                              </div>
+                              <div className="text-[10px] text-teal-700">{tampil} tampil</div>
+                            </div>
                           );
                         })()}
                       </td>
@@ -1769,7 +1750,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                       {columns.map((col, colIdx) => {
                         const rawVal = edit.cellValues[col.key] ?? '';
                         const check = parseNumericScoreInput(rawVal);
-                        const cellColIdx = colIdx + 1;
+                        const cellColIdx = colIdx;
                         return (
                           <td key={col.key} className="border border-slate-300 p-0">
                             <input
@@ -1794,7 +1775,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
 
                       <td className="border border-slate-300 p-0 bg-indigo-50/20">
                         {(() => {
-                          const sasColIdx = columns.length + 1;
+                          const sasColIdx = columns.length;
                           const sasCheck = parseNumericScoreInput(edit.sasValue);
                           return (
                             <input
@@ -1817,7 +1798,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         })()}
                       </td>
 
-                      {/* Rata-rata Sumatif (BAB + SAS) */}
+                      {/* Rata-rata Sumatif (Lingkup Materi + SAS) */}
                       <td className="border border-slate-300 px-2 py-1.5 text-center font-bold tabular-nums bg-sky-50/30 text-sky-900">
                         {row.sumatifAverage !== undefined ? formatScoreDecimal(row.sumatifAverage) : '--'}
                       </td>
@@ -1825,7 +1806,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                       {showManualColumn && (
                         <td className="border border-slate-300 p-0 bg-amber-50/20">
                           {(() => {
-                            const manualColIdx = columns.length + 2;
+                            const manualColIdx = columns.length + 1;
                             const manualCheck = parseNumericScoreInput(edit.manualFinalValue);
                             return (
                               <input

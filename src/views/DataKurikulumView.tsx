@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Curriculum, User } from '../types/erapor';
-import { Sparkles, Save, Check, Scale, BookOpen, Layers } from 'lucide-react';
+import { Sparkles, Save, Check, Scale, BookOpen } from 'lucide-react';
 
 interface DataKurikulumViewProps {
   curricula: Curriculum[];
@@ -16,20 +16,6 @@ export const DataKurikulumView: React.FC<DataKurikulumViewProps> = ({
   const [list, setList] = useState<Curriculum[]>([...curricula]);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  const handleWeightChange = (id: string, formatifWeight: number) => {
-    const updated = list.map((cur) => {
-      if (cur.id === id) {
-        return {
-          ...cur,
-          formatifWeight,
-          sumatifWeight: 100 - formatifWeight
-        };
-      }
-      return cur;
-    });
-    setList(updated);
-  };
-
   const handleSave = () => {
     onSaveCurricula(list);
     setSavedSuccess(true);
@@ -42,10 +28,10 @@ export const DataKurikulumView: React.FC<DataKurikulumViewProps> = ({
         <div>
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-blue-600" />
-            Konfigurasi Struktur & Bobot Kurikulum
+            Konfigurasi Struktur Kurikulum &amp; KKTP
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Pengaturan kurikulum resmi yang berlaku di SMP Negeri 1 Rangsang, pembobotan nilai formatif vs sumatif, dan ambang batas kelulusan.
+            Pengaturan kurikulum resmi SMP Negeri 1 Rangsang, model pengolahan nilai rapor E-Rapor SMP, dan ambang batas ketercapaian (KKTP).
           </p>
         </div>
 
@@ -73,52 +59,33 @@ export const DataKurikulumView: React.FC<DataKurikulumViewProps> = ({
               </div>
             </div>
 
-            {/* Weight settings */}
+            {/* Active E-Rapor Policy + KKTP */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+              <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                  <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
                     <Scale className="w-4 h-4 text-blue-600" />
-                    Pembobotan Nilai Rapor
+                    Model Pengolahan Nilai E-Rapor SMP
                   </div>
-                  <span className="text-xs font-black text-blue-700">Total: 100%</span>
+                  <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-bold">
+                    Aktif
+                  </span>
                 </div>
 
-                <div className="space-y-3 text-xs">
-                  <div>
-                    <div className="flex justify-between mb-1 font-semibold text-slate-700">
-                      <span>Bobot Penilaian Formatif / Lingkup Materi:</span>
-                      <span className="font-bold text-blue-600">{cur.formatifWeight}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={10}
-                      max={90}
-                      step={5}
-                      value={cur.formatifWeight}
-                      onChange={(e) => handleWeightChange(cur.id, Number(e.target.value))}
-                      disabled={currentUser.role !== 'admin'}
-                      className="w-full accent-blue-600 cursor-pointer"
-                    />
+                <div className="space-y-2 text-xs text-slate-700 leading-relaxed">
+                  <div className="p-2.5 rounded-lg bg-white border border-blue-100">
+                    <div className="font-bold text-teal-800">1. Asesmen Formatif (KKTP 0/1 &amp; Deskripsi)</div>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Digunakan untuk mencatat ketercapaian Tujuan Pembelajaran (<strong>KKTP 0/1</strong> &amp; pilihan <strong>Tampil/Tidak</strong>) serta menyusun deskripsi capaian tertinggi dan terendah pada rapor. Tidak dihitung sebagai komponen persentase angka rapor.
+                    </p>
                   </div>
-
-                  <div>
-                    <div className="flex justify-between mb-1 font-semibold text-slate-700">
-                      <span>Bobot Sumatif Akhir Semester (SAS):</span>
-                      <span className="font-bold text-indigo-600">{cur.sumatifWeight}%</span>
-                    </div>
-                    <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-indigo-600 rounded-full transition-all"
-                        style={{ width: `${cur.sumatifWeight}%` }}
-                      />
-                    </div>
+                  <div className="p-2.5 rounded-lg bg-white border border-blue-100">
+                    <div className="font-bold text-blue-800">2. Asesmen Sumatif (Nilai Angka Rapor)</div>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Nilai Rapor dihitung dari rata-rata <strong>Sumatif Lingkup Materi</strong> yang terisi, ditambah <strong>SAS</strong> (tidak wajib) apabila dilaksanakan.
+                    </p>
                   </div>
                 </div>
-
-                <p className="text-[11px] text-slate-500 leading-relaxed italic">
-                  Rumus Nilai Akhir = ({cur.formatifWeight}% &times; Rata-rata Formatif) + ({cur.sumatifWeight}% &times; Rata-rata Sumatif).
-                </p>
               </div>
 
               {/* Kriteria Ketercapaian */}

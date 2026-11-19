@@ -291,9 +291,14 @@ export interface AssessmentScore {
   semester: 'Ganjil' | 'Genap';
   semesterId?: string;
   formatifScores: Record<string, number>; // TP ID -> Score 0-100
+  formatifKktpScores?: Record<string, number>; // TP ID -> 0 or 1 (KKTP attainment)
+  formatifShowScores?: Record<string, number>; // TP ID -> 0 or 1 (Show in report description)
   sumatifMateriScores: Record<string, number>; // TP / Scope -> Score 0-100
   chapterScores?: Record<string, number>; // LearningChapter ID -> Score 0-100
   sumatifAkhirSemester: number; // Test score SAS/ASAS
+  sasNonTes?: number; // Non-test SAS score
+  sasTes?: number; // Test SAS score
+  naSas?: number; // Final SAS score
   hasSasScore?: boolean; // Distinguishes explicit 0 SAS from blank/unentered SAS
   babAverage?: number; // Computed average of filled BAB scores
   babWeightPercent?: number; // Effective BAB weight % used in calculation

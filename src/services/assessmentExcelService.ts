@@ -60,7 +60,7 @@ export function buildReportScoreExcelWorkbook(params: ReportScoreExcelTemplatePa
     ['TAHUN_AJARAN', academicYear, 'SEMESTER', semester],
     ['ID_MAPEL', subject.id, 'NAMA_MAPEL', subject.name],
     ['ID_ROMBEL', classroom.id, 'NAMA_ROMBEL', classroom.name],
-    ['BOBOT_BAB', weights.babWeightPercent, 'BOBOT_SAS', weights.sasWeightPercent],
+    ['MODEL_PENILAIAN', weights.formulaLabel, 'KKM', subject.kkm || weights.passingCriteria],
     [],
     ['NO', 'NIS', 'NISN', 'NAMA_SISWA', ...chapterHeaders, 'NILAI_SAS', 'NILAI_AKHIR']
   ];

@@ -18,7 +18,14 @@ import {
   Curriculum
 } from '../types/erapor';
 import { ReportScoreExcelTab } from '../components/assessment/ReportScoreExcelTab';
-import { resolveSchoolWeights, filterChaptersForContext, computeStudentReportScore, getEffectiveSasScore } from '../utils/assessmentCalculation';
+import {
+  resolveSchoolWeights,
+  filterChaptersForContext,
+  computeStudentReportScore,
+  getEffectiveSasScore,
+  aggregateChapterScoresFromSummatives,
+  buildDeterministicScoreId
+} from '../utils/assessmentCalculation';
 import {
   Calculator,
   TrendingUp,
@@ -42,6 +49,7 @@ import {
 } from '../utils/tpAnalysisAndDescription';
 import { getVisibleSubjectsForUser } from '../utils/teacherAssignmentHelper';
 import { sortClassrooms } from '../utils/classroomSort';
+import { normalizeAcademicYearValue, normalizeSemesterValue } from '../utils/electiveSubjectHelper';
 
 interface PengolahanNilaiAkhirViewProps {
   classrooms: Classroom[];
@@ -167,25 +175,39 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
     );
   }, [finalScoreConfigs, selectedSubjectId, selectedClassId]);
 
-  // 3. Calculation Logic (preserving school formulas + multi-TP + automated TP description)
+  const contextChapters = useMemo(() => {
+    return filterChaptersForContext(learningChapters || [], {
+      subjectId: selectedSubjectId,
+      classId: selectedClassId,
+      academicYear,
+      semester
+    });
+  }, [learningChapters, selectedSubjectId, selectedClassId, academicYear, semester]);
+
+  // 3. Calculation Logic (preserving school formulas + multi-TP / chapter Lingkup Materi + automated TP description)
   const computedData = useMemo(() => {
     const subj = subjects.find((s) => s.id === selectedSubjectId);
+    const targetNormYear = normalizeAcademicYearValue(academicYear);
+    const targetNormSem = normalizeSemesterValue(semester);
+    const weights = resolveSchoolWeights(curricula);
+    const passingCriteria = subj?.kkm || weights.passingCriteria;
 
     return filteredStudents.map((std) => {
       const existing = scores.find(
         (s) =>
           s.studentId === std.id &&
           s.subjectId === selectedSubjectId &&
-          s.academicYear === academicYear &&
-          s.semester === semester
+          (s.classId === selectedClassId || !s.classId) &&
+          normalizeAcademicYearValue(s.academicYear) === targetNormYear &&
+          normalizeSemesterValue(s.semester) === targetNormSem
       );
 
       const studentSummative = summativeAssessments.filter(
         (a) =>
           a.studentId === std.id &&
           a.subjectId === selectedSubjectId &&
-          a.academicYear === academicYear &&
-          a.semester === semester
+          normalizeAcademicYearValue(a.academicYear) === targetNormYear &&
+          normalizeSemesterValue(a.semester) === targetNormSem
       );
 
       // Group scores by all linked TPs
@@ -208,31 +230,50 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         }
       });
 
-      const weights = resolveSchoolWeights(curricula);
+      const chapterScores =
+        contextChapters.length > 0
+          ? aggregateChapterScoresFromSummatives({
+              studentId: std.id,
+              subjectId: selectedSubjectId,
+              classId: selectedClassId,
+              academicYear,
+              semester,
+              chapters: contextChapters,
+              summativeAssessments,
+              existingChapterScores: existing?.chapterScores
+            })
+          : existing?.chapterScores || {};
+
+      const hasTpScores = Object.keys(tpAverages).length > 0;
+      const hasChapterScores = Object.keys(chapterScores).length > 0;
+      const useChapters = contextChapters.length > 0 && (hasChapterScores || !hasTpScores);
+
+      const effectiveChapters: LearningChapter[] = useChapters
+        ? contextChapters
+        : (relevantObjectives.map((tp, idx) => ({
+            id: tp.id,
+            code: tp.code || `TP ${idx + 1}`,
+            orderIndex: idx + 1,
+            title: tp.materi || tp.description,
+            subjectId: selectedSubjectId,
+            classId: selectedClassId,
+            gradeLevel: selectedClassroom?.gradeLevel || '7',
+            teacherId: '',
+            academicYear,
+            semester,
+            createdAt: '',
+            updatedAt: ''
+          })) as LearningChapter[]);
+
       const sasVal = getEffectiveSasScore(existing);
       const calcResult = computeStudentReportScore({
-        chapters: relevantObjectives.map((tp, idx) => ({
-          id: tp.id,
-          code: tp.code || `TP ${idx + 1}`,
-          orderIndex: idx + 1,
-          title: tp.materi || tp.description,
-          subjectId: selectedSubjectId,
-          classId: selectedClassId,
-          gradeLevel: selectedClassroom?.gradeLevel || '7',
-          teacherId: '',
-          academicYear,
-          semester,
-          createdAt: '',
-          updatedAt: ''
-        })) as LearningChapter[],
-        chapterScores: tpAverages,
+        chapters: effectiveChapters,
+        chapterScores: useChapters ? chapterScores : tpAverages,
         sasScore: sasVal,
         formatifScores: existing?.formatifScores,
         manualFinalScore: existing?.manualFinalScore,
-        formatifWeightPercent: weights.formatifWeightPercent,
-        sumatifWeightPercent: weights.sumatifWeightPercent,
-        passingCriteria: subj?.kkm || weights.passingCriteria,
-        legacyMateriScores: tpAverages
+        passingCriteria,
+        legacyMateriScores: useChapters ? chapterScores : tpAverages
       });
 
       const effectiveFinalScore = calcResult.finalScore;
@@ -248,9 +289,17 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         formativeAssessments,
         summativeAssessments,
         existingScore: existing
-          ? { ...existing, sumatifMateriScores: { ...existing.sumatifMateriScores, ...tpAverages } }
-          : Object.keys(tpAverages).length > 0
-          ? ({ sumatifMateriScores: tpAverages, formatifScores: {} } as AssessmentScore)
+          ? {
+              ...existing,
+              chapterScores,
+              sumatifMateriScores: { ...(existing.sumatifMateriScores || {}), ...chapterScores, ...tpAverages }
+            }
+          : Object.keys(tpAverages).length > 0 || Object.keys(chapterScores).length > 0
+          ? ({
+              chapterScores,
+              sumatifMateriScores: { ...chapterScores, ...tpAverages },
+              formatifScores: {}
+            } as AssessmentScore)
           : undefined,
         kktpConfigs,
         policy: assessmentPolicy
@@ -273,16 +322,24 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
         student: std,
         existing,
         tpAverages,
-        hasAnyScore: Object.keys(tpAverages).length > 0 || Boolean(existing),
+        chapterScores,
+        calcResult,
+        hasAnyScore:
+          Object.keys(tpAverages).length > 0 ||
+          Object.keys(chapterScores).length > 0 ||
+          sasVal !== undefined ||
+          existing?.manualFinalScore !== undefined ||
+          Boolean(existing),
         finalScore: effectiveFinalScore,
         analysis,
         composed,
-        predicate: effectiveFinalScore !== undefined ? calculatePredicate(effectiveFinalScore) : undefined
+        predicate: effectiveFinalScore !== undefined ? calculatePredicate(effectiveFinalScore, passingCriteria) : undefined
       };
     });
   }, [
     filteredStudents,
     subjects,
+    curricula,
     selectedSubjectId,
     selectedClassId,
     selectedClassroom,
@@ -291,6 +348,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
     scores,
     summativeAssessments,
     relevantObjectives,
+    contextChapters,
     currentConfig,
     learningObjectives,
     formativeAssessments,
@@ -330,8 +388,14 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           ? existing!.descriptionStatus
           : ('Belum dibuat' as const);
 
+        const resolvedFinal =
+          existing?.manualFinalScore !== undefined
+            ? existing.manualFinalScore
+            : item.finalScore ?? existing?.finalScore ?? 0;
+
         return {
-          id: existing?.id || `sc-${item.student.id}-${selectedSubjectId}-${academicYear.replace(/\//g, '_')}-${semester}`,
+          ...(existing || {}),
+          id: existing?.id || buildDeterministicScoreId(item.student.id, selectedSubjectId, academicYear, semester),
           studentId: item.student.id,
           studentName: item.student.name,
           subjectId: selectedSubjectId,
@@ -341,10 +405,23 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           academicYear,
           semester,
           formatifScores: existing?.formatifScores || {},
-          sumatifMateriScores: item.tpAverages,
+          chapterScores: item.chapterScores,
+          sumatifMateriScores: {
+            ...(existing?.sumatifMateriScores || {}),
+            ...item.chapterScores,
+            ...item.tpAverages
+          },
           sumatifAkhirSemester: existing?.sumatifAkhirSemester || 0,
-          finalScore: item.finalScore ?? 0,
-          predicate: item.predicate || 'D',
+          hasSasScore: getEffectiveSasScore(existing) !== undefined,
+          babAverage: item.calcResult.babAverage,
+          sumatifAverage: item.calcResult.sumatifAverage,
+          rawFinalScore: item.calcResult.rawFinalScore,
+          finalScoreBreakdown: item.calcResult.breakdownText,
+          completenessStatus: item.calcResult.completenessStatus,
+          hasMissingComponents: item.calcResult.hasMissingComponents,
+          missingComponentNote: item.calcResult.missingComponentNote,
+          finalScore: resolvedFinal,
+          predicate: item.predicate || calculatePredicate(resolvedFinal),
           selectedOptimalTpIds: existing?.selectedOptimalTpIds || [],
           selectedImprovementTpIds: existing?.selectedImprovementTpIds || [],
           highestCompetenceDesc: nextHighest,
@@ -364,7 +441,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           updatedAt: nowIso,
           updatedBy: currentUser.name,
           updatedById: currentUser.id,
-          status: 'SELESAI'
+          status: existing?.status === 'TERKUNCI' ? 'TERKUNCI' : 'SELESAI'
         };
       });
 
@@ -582,6 +659,15 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
       </div>
 
       {/* Main Calculation Table */}
+      {(() => {
+        const anyTpScores = computedData.some((item) => Object.keys(item.tpAverages).length > 0);
+        const anyChapScores = computedData.some((item) => Object.keys(item.chapterScores).length > 0);
+        const useChapCols = contextChapters.length > 0 && (anyChapScores || !anyTpScores);
+        const displayCols = useChapCols
+          ? contextChapters.map((ch) => ({ id: ch.id, code: ch.code, label: 'Lingkup Materi' }))
+          : relevantObjectives.map((tp) => ({ id: tp.id, code: tp.code, label: 'Sumatif TP' }));
+
+        return (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -589,14 +675,20 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
               <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
                 <th className="px-4 py-3 text-[10px] font-bold w-10 text-center">NO</th>
                 <th className="px-4 py-3 text-[10px] font-bold min-w-[180px]">NAMA SISWA</th>
-                {relevantObjectives.map((tp) => (
-                  <th key={tp.id} className="px-3 py-3 text-[10px] font-bold text-center border-l border-slate-100">
+                {displayCols.map((col) => (
+                  <th key={col.id} className="px-3 py-3 text-[10px] font-bold text-center border-l border-slate-100">
                     <div className="flex flex-col items-center">
-                      <span className="text-blue-600">{tp.code}</span>
-                      <span className="text-[9px] text-slate-400 font-normal">Sumatif</span>
+                      <span className="text-blue-600">{col.code}</span>
+                      <span className="text-[9px] text-slate-400 font-normal">{col.label}</span>
                     </div>
                   </th>
                 ))}
+                <th className="px-3 py-3 text-[10px] font-bold text-center border-l border-slate-100 bg-indigo-50/30">
+                  <div className="flex flex-col items-center">
+                    <span className="text-indigo-700">SAS</span>
+                    <span className="text-[9px] text-slate-400 font-normal">Opsional</span>
+                  </div>
+                </th>
                 <th className="px-4 py-3 text-[10px] font-bold text-center bg-indigo-50/50 border-l border-slate-200">
                   NILAI AKHIR
                 </th>
@@ -614,10 +706,12 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                     <div className="font-bold text-slate-800 text-xs uppercase">{item.student.name}</div>
                     <div className="text-[9px] text-slate-400 font-mono">NISN: {item.student.nisn}</div>
                   </td>
-                  {relevantObjectives.map((tp) => {
-                    const avg = item.tpAverages[tp.id];
+                  {displayCols.map((col) => {
+                    const avg = useChapCols
+                      ? item.chapterScores[col.id]
+                      : item.tpAverages[col.id];
                     return (
-                      <td key={tp.id} className="px-3 py-3 text-center border-l border-slate-50">
+                      <td key={col.id} className="px-3 py-3 text-center border-l border-slate-50">
                         {avg !== undefined ? (
                           <div className="text-xs font-bold text-slate-700">{avg}</div>
                         ) : (
@@ -626,6 +720,13 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
                       </td>
                     );
                   })}
+                  <td className="px-3 py-3 text-center border-l border-slate-50 bg-indigo-50/10">
+                    {item.calcResult.sasScore !== undefined ? (
+                      <div className="text-xs font-bold text-indigo-700">{item.calcResult.sasScore}</div>
+                    ) : (
+                      <div className="text-[10px] text-slate-300 italic">-</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center bg-indigo-50/20 border-l border-slate-100">
                     {item.finalScore !== undefined ? (
                       <div className="text-sm font-black text-indigo-700">{item.finalScore}</div>
@@ -676,6 +777,8 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           </table>
         </div>
       </div>
+        );
+      })()}
 
       {/* Action Footer */}
       <div className="flex flex-col md:flex-row items-center justify-between gap-6 p-6 bg-slate-800 rounded-2xl shadow-xl border border-slate-700">

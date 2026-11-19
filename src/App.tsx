@@ -2752,14 +2752,10 @@ export default function App() {
             <AsesmenFormatifView
               classrooms={db.classrooms}
               subjects={db.subjects}
+              students={db.students}
               learningObjectives={db.learningObjectives}
-              learningChapters={db.learningChapters || EMPTY_ARRAY}
-              summativePlans={db.summativePlans || EMPTY_ARRAY}
-              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
-              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               scores={db.scores}
-              onSaveObjective={handleSaveObjective}
-              onDeleteObjective={handleDeleteObjective}
+              onSaveScores={handleSaveScores}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               teachers={db.teachers}
@@ -2774,16 +2770,15 @@ export default function App() {
             <AsesmenSumatifView
               classrooms={db.classrooms}
               subjects={db.subjects}
+              students={db.students}
               learningObjectives={db.learningObjectives}
               learningChapters={db.learningChapters || EMPTY_ARRAY}
               summativePlans={db.summativePlans || EMPTY_ARRAY}
               summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               scores={db.scores}
+              onSaveScores={handleSaveScores}
               onSaveLearningChapter={handleSaveLearningChapter}
               onDeleteLearningChapter={handleDeleteLearningChapter}
-              onSaveSummativePlan={handleSaveSummativePlan}
-              onDeleteSummativePlan={handleDeleteSummativePlan}
-              onSaveObjective={handleSaveObjective}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               teachers={db.teachers}

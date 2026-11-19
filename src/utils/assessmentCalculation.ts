@@ -158,24 +158,15 @@ export interface ResolvedSchoolWeights {
 
 export function resolveSchoolWeights(curricula: Curriculum[] = []): ResolvedSchoolWeights {
   const curMerdeka = curricula.find((c) => c.id === 'cur-merdeka') || curricula[0];
-  const rawFormatif = Number(curMerdeka?.formatifWeight);
-  const rawSumatif = Number(curMerdeka?.sumatifWeight);
-
-  const formatifWeightPercent = Number.isFinite(rawFormatif) && rawFormatif >= 0 ? rawFormatif : 50;
-  const sumatifWeightPercent = Number.isFinite(rawSumatif) && rawSumatif >= 0 ? rawSumatif : 100 - formatifWeightPercent;
-  const total = formatifWeightPercent + sumatifWeightPercent;
-
-  const normalizedFormatif = total > 0 ? Math.round((formatifWeightPercent / total) * 100) : 50;
-  const normalizedSumatif = 100 - normalizedFormatif;
 
   return {
-    formatifWeightPercent: normalizedFormatif,
-    sumatifWeightPercent: normalizedSumatif,
-    babWeightPercent: normalizedFormatif,
-    sasWeightPercent: normalizedSumatif,
+    formatifWeightPercent: 0,
+    sumatifWeightPercent: 100,
+    babWeightPercent: 0,
+    sasWeightPercent: 100,
     passingCriteria: curMerdeka?.passingCriteria || 75,
     curriculumId: curMerdeka?.id || 'cur-merdeka',
-    formulaLabel: `(${normalizedFormatif}% × Rata-rata Formatif) + (${normalizedSumatif}% × Rata-rata Sumatif)`
+    formulaLabel: 'Nilai Rapor dari Asesmen Sumatif (NA Lingkup Materi + SAS)'
   };
 }
 
@@ -393,49 +384,29 @@ export function computeStudentReportScore(
     sumatifAverage = Math.round(rawSumAvg * 100) / 100;
   }
 
-  // 5. Missing Component Warnings
+  // 5. Missing Component Warnings (Formatif uses KKTP 0/1 & Tampil for descriptions; SAS is optional)
   const missingWarnings: string[] = [];
-  if (chapters.length === 0 && legacyValues.length === 0) {
-    missingWarnings.push('Belum ada BAB Materi di modul Sumatif');
+  if (chapters.length === 0 && legacyValues.length === 0 && !hasSas) {
+    missingWarnings.push('Belum ada nilai Sumatif Lingkup Materi');
   } else if (missingChapterCodes.length > 0) {
     missingWarnings.push(`${missingChapterCodes.join(', ')} belum diisi (tidak dihitung 0)`);
   }
-  if (!hasSas) {
-    missingWarnings.push('Nilai SAS belum diisi (tidak dihitung 0)');
-  }
-  if (formatifAverage === undefined) {
-    missingWarnings.push('Nilai Formatif belum diisi (tidak dihitung 0)');
-  }
 
-  // 6. Calculate Final Score & Breakdown
-  const fWeight = (formatifWeightPercent ?? 50) / 100;
-  const sWeight = (sumatifWeightPercent ?? 50) / 100;
-
+  // 6. Calculate Final Score from Summative components (NA Sumatif Lingkup Materi & optional SAS)
   let finalScore: number | undefined;
   let rawFinalScore: number | undefined;
   let breakdownText = '';
 
-  if (formatifAverage !== undefined && sumatifAverage !== undefined) {
-    // Official School Rule: (Rata-rata Formatif × 50%) + (Rata-rata Sumatif × 50%)
-    const fmtPart = formatifAverage * fWeight;
-    const sumPart = sumatifAverage * sWeight;
-    const rawFinal = fmtPart + sumPart;
-    rawFinalScore = Math.round(rawFinal * 100) / 100;
-    finalScore = Math.round(clampScore0To100(rawFinal));
-    breakdownText = `(Formatif: ${formatScoreDecimal(formatifAverage)} × ${Math.round(
-      fWeight * 100
-    )}%) + (Sumatif: ${formatScoreDecimal(sumatifAverage)} × ${Math.round(
-      sWeight * 100
-    )}%) = ${formatScoreDecimal(fmtPart)} + ${formatScoreDecimal(sumPart)} = ${formatScoreDecimal(
-      rawFinalScore
-    )} → ${finalScore}`;
+  if (sumatifAverage !== undefined) {
+    rawFinalScore = sumatifAverage;
+    finalScore = Math.round(clampScore0To100(sumatifAverage));
+    breakdownText = hasSas
+      ? `Nilai Rapor dari Asesmen Sumatif (Lingkup Materi + SAS): ${formatScoreDecimal(rawFinalScore)} → ${finalScore}`
+      : `Nilai Rapor dari NA Sumatif Lingkup Materi (Tanpa SAS): ${formatScoreDecimal(rawFinalScore)} → ${finalScore}`;
   } else {
     rawFinalScore = undefined;
     finalScore = undefined;
-    const missingParts: string[] = [];
-    if (formatifAverage === undefined) missingParts.push('Nilai Formatif belum diisi');
-    if (sumatifAverage === undefined) missingParts.push('Nilai Sumatif/SAS belum diisi');
-    breakdownText = `Belum lengkap: ${missingParts.join(' dan ')} (tidak dihitung 0).`;
+    breakdownText = 'Belum lengkap: Nilai Sumatif Lingkup Materi belum diisi (tidak dihitung 0).';
   }
 
   if (typeof manualFinalScore === 'number' && Number.isFinite(manualFinalScore)) {
@@ -447,10 +418,9 @@ export function computeStudentReportScore(
   const hasMissingComponents = missingWarnings.length > 0;
   const missingComponentNote = hasMissingComponents ? missingWarnings.join('; ') : undefined;
   const isComplete =
-    formatifAverage !== undefined &&
-    hasBab &&
-    missingChapterCodes.length === 0 &&
-    hasSas;
+    chapters.length > 0
+      ? hasBab && missingChapterCodes.length === 0
+      : hasBab || hasSas;
 
   return {
     chapterScores: cleanChapterScores,

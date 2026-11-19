@@ -28,7 +28,7 @@ export const DEFAULT_ASSESSMENT_POLICY: AssessmentPolicyConfig = {
   usePerTpKktpIfConfigured: true,
   formulaPolicyMode: 'existing_default',
   confirmedFormulaNote:
-    'Menggunakan rumus resmi sekolah yang berjalan: Nilai Akhir Rapor diolah dari penilaian Sumatif (50% Rata-rata Sumatif Materi + 50% SAS pada Input Nilai, atau metode Rata-rata / Pembobotan / Persentase TP pada Pengolahan Nilai Akhir). Asesmen Formatif memantau perkembangan dan bukti ketercapaian TP tanpa mengubah bobot angka rapor.',
+    'Menggunakan model E-Rapor SMP: Nilai Akhir Rapor diolah dari Asesmen Sumatif (NA Sumatif Lingkup Materi, dan SAS apabila dilaksanakan). Asesmen Formatif merekap ketercapaian TP (KKTP 0/1 & Tampil) untuk menyusun deskripsi rapor tanpa menjadi bobot nilai angka rapor.',
   includeFormativeInFinalScore: false,
   isInputLocked: false,
   lockedPeriods: {},
@@ -245,15 +245,18 @@ export function analyzeStudentTPAttainment(params: {
       inferFormativeMasteryStatus(fa, { optimalMin, goodMin })
     );
 
+    const kktpFlag = params.existingScore?.formatifKktpScores?.[tp.id];
     const legacyFormVal = params.existingScore?.formatifScores?.[tp.id];
-    if (
-      formativeStatuses.length === 0 &&
-      typeof legacyFormVal === 'number' &&
-      Number.isFinite(legacyFormVal)
-    ) {
-      if (legacyFormVal >= optimalMin) formativeStatuses.push('Tercapai Optimal');
-      else if (legacyFormVal >= goodMin) formativeStatuses.push('Tercapai Baik');
-      else formativeStatuses.push('Perlu Penguatan');
+    if (formativeStatuses.length === 0) {
+      if (kktpFlag === 1) {
+        formativeStatuses.push('Tercapai Baik');
+      } else if (kktpFlag === 0) {
+        formativeStatuses.push('Perlu Penguatan');
+      } else if (typeof legacyFormVal === 'number' && Number.isFinite(legacyFormVal)) {
+        if (legacyFormVal >= optimalMin) formativeStatuses.push('Tercapai Optimal');
+        else if (legacyFormVal >= goodMin) formativeStatuses.push('Tercapai Baik');
+        else formativeStatuses.push('Perlu Penguatan');
+      }
     }
 
     const summativeCount = summativeScores.length;

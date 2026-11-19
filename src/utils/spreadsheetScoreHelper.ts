@@ -519,14 +519,6 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
     const stableId =
       existing?.id || buildDeterministicScoreId(std.id, subject.id, academicYear, semester);
 
-    const formatifParsed = parseNumericScoreInput(edit.formatifValue ?? '');
-    let mergedFormatif: Record<string, number> = { ...(existing?.formatifScores || {}) };
-    if (!formatifParsed.isEmpty && formatifParsed.value !== undefined) {
-      mergedFormatif = { default: formatifParsed.value };
-    } else if (edit.formatifValue === '') {
-      delete mergedFormatif['default'];
-    }
-
     scoresToSave.push({
       ...(existing || {}),
       id: stableId,
@@ -538,8 +530,8 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
       className,
       academicYear,
       semester,
-      formatifScores: mergedFormatif,
-      formatifAverage: row.formatifAverage,
+      formatifScores: existing?.formatifScores || {},
+      formatifAverage: existing?.formatifAverage,
       sumatifAverage: row.sumatifAverage,
       rawFinalScore: row.rawFinalScore,
       completenessStatus: row.completenessStatus,
@@ -709,7 +701,8 @@ export function parseSpreadsheetTableExcelData(
       if (nisnCol === -1) nisnCol = idx;
     } else if (upper.includes('NIS') && !upper.includes('NISN')) {
       if (nisCol === -1) nisCol = idx;
-    } else if (upper.includes('FORMATIF') || upper.includes('NILAI_FORMATIF') || upper.includes('HARIAN')) {
+    } else if (upper.includes('REKAP_FORMATIF') || upper.includes('KKTP')) {
+      // Skip non-numeric Formatif KKTP summary column so re-importing exported grid works cleanly
       if (formatifCol === -1) formatifCol = idx;
     } else if (upper.includes('SAS') || upper.includes('SUMATIF_AKHIR') || upper.includes('AKHIR_SEMESTER')) {
       if (!upper.includes('NILAI_AKHIR') || upper.includes('SAS')) {
@@ -756,15 +749,6 @@ export function parseSpreadsheetTableExcelData(
       });
     }
   });
-
-  if (formatifCol !== -1) {
-    mappedColumns.push({
-      key: 'formatif',
-      label: 'Nilai Formatif',
-      fileHeader: headers[formatifCol],
-      columnIndex: formatifCol
-    });
-  }
 
   if (sasCol !== -1) {
     mappedColumns.push({
