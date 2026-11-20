@@ -19,6 +19,8 @@ import {
   mergeDescriptionBankWithDefaults
 } from './descriptionBank';
 
+import { normalizeAcademicYearValue, normalizeSemesterValue } from './electiveSubjectHelper';
+
 export const DEFAULT_ASSESSMENT_POLICY: AssessmentPolicyConfig = {
   id: 'assessment_policy',
   optimalMinScore: 88,
@@ -28,8 +30,12 @@ export const DEFAULT_ASSESSMENT_POLICY: AssessmentPolicyConfig = {
   usePerTpKktpIfConfigured: true,
   formulaPolicyMode: 'existing_default',
   confirmedFormulaNote:
-    'Menggunakan model E-Rapor SMP: Nilai Akhir Rapor diolah dari Asesmen Sumatif (NA Sumatif Lingkup Materi, dan SAS apabila dilaksanakan). Asesmen Formatif merekap ketercapaian TP (KKTP 0/1 & Tampil) untuk menyusun deskripsi rapor tanpa menjadi bobot nilai angka rapor.',
+    'Nilai Rapor dihitung dari (Rata-rata Sumatif Lingkup Materi × Bobot Lingkup Materi) + (Nilai SAS × Bobot SAS) sesuai bobot yang ditetapkan Administrator (bawaan 70% : 30%). Asesmen Formatif merekap ketercapaian TP (KKTP 0/1 & Tampil/Tidak 0/1) untuk menyusun deskripsi capaian rapor.',
   includeFormativeInFinalScore: false,
+  lingkupMateriWeightPercent: 70,
+  sasWeightPercent: 30,
+  sasConducted: true,
+  sasNotConductedPolicy: 'lingkup_materi_100',
   isInputLocked: false,
   lockedPeriods: {},
   lockedMessage: '',
@@ -39,6 +45,35 @@ export const DEFAULT_ASSESSMENT_POLICY: AssessmentPolicyConfig = {
 export function normalizeAssessmentPolicy(
   policy?: Partial<AssessmentPolicyConfig> | null
 ): AssessmentPolicyConfig {
+  const clampWeight = (val: number) => Math.min(100, Math.max(0, Math.round(val)));
+
+  let lingkupWeight = DEFAULT_ASSESSMENT_POLICY.lingkupMateriWeightPercent ?? 70;
+  let sasWeight = DEFAULT_ASSESSMENT_POLICY.sasWeightPercent ?? 30;
+
+  if (
+    typeof policy?.lingkupMateriWeightPercent === 'number' &&
+    Number.isFinite(policy.lingkupMateriWeightPercent)
+  ) {
+    lingkupWeight = clampWeight(policy.lingkupMateriWeightPercent);
+    sasWeight = 100 - lingkupWeight;
+  } else if (
+    typeof policy?.sasWeightPercent === 'number' &&
+    Number.isFinite(policy.sasWeightPercent)
+  ) {
+    sasWeight = clampWeight(policy.sasWeightPercent);
+    lingkupWeight = 100 - sasWeight;
+  }
+
+  const sasConducted =
+    typeof policy?.sasConducted === 'boolean'
+      ? policy.sasConducted
+      : DEFAULT_ASSESSMENT_POLICY.sasConducted ?? true;
+
+  const sasNotConductedPolicy =
+    policy?.sasNotConductedPolicy === 'keep_weight_mark_incomplete'
+      ? 'keep_weight_mark_incomplete'
+      : 'lingkup_materi_100';
+
   return {
     ...DEFAULT_ASSESSMENT_POLICY,
     ...(policy || {}),
@@ -59,6 +94,11 @@ export function normalizeAssessmentPolicy(
       typeof policy?.minimumTpEvidenceCount === 'number' && policy.minimumTpEvidenceCount >= 1
         ? policy.minimumTpEvidenceCount
         : DEFAULT_ASSESSMENT_POLICY.minimumTpEvidenceCount,
+    includeFormativeInFinalScore: false,
+    lingkupMateriWeightPercent: lingkupWeight,
+    sasWeightPercent: sasWeight,
+    sasConducted,
+    sasNotConductedPolicy,
     lockedPeriods: {
       ...(DEFAULT_ASSESSMENT_POLICY.lockedPeriods || {}),
       ...(policy?.lockedPeriods || {})
@@ -97,16 +137,31 @@ export function filterObjectivesForContext(
     subjectId: string;
     gradeLevel?: '7' | '8' | '9' | string;
     classId?: string;
-    semester: 'Ganjil' | 'Genap';
+    semester?: 'Ganjil' | 'Genap' | 'Semua';
     academicYear?: string;
   }
 ): LearningObjective[] {
-  return learningObjectives.filter((tp) => {
-    if (tp.subjectId !== params.subjectId) return false;
-    if (tp.semester !== params.semester) return false;
-    if (params.gradeLevel && String(tp.gradeLevel) !== String(params.gradeLevel)) return false;
+  const targetYear = params.academicYear ? normalizeAcademicYearValue(params.academicYear) : '';
+  const targetSem =
+    params.semester && params.semester !== 'Semua'
+      ? normalizeSemesterValue(params.semester)
+      : '';
+
+  return (learningObjectives || []).filter((tp) => {
+    if (!tp || tp.subjectId !== params.subjectId) return false;
+    if (
+      targetSem &&
+      tp.semester &&
+      String(tp.semester) !== 'Semua' &&
+      normalizeSemesterValue(tp.semester) !== targetSem
+    ) {
+      return false;
+    }
+    if (params.gradeLevel && tp.gradeLevel && String(tp.gradeLevel) !== String(params.gradeLevel)) {
+      return false;
+    }
     if (tp.classId && params.classId && tp.classId !== params.classId) return false;
-    if (tp.academicYear && params.academicYear && tp.academicYear !== params.academicYear) {
+    if (tp.academicYear && targetYear && normalizeAcademicYearValue(tp.academicYear) !== targetYear) {
       return false;
     }
     return true;
@@ -710,3 +765,93 @@ export function resolveRaporCompetenceDisplay(score?: AssessmentScore): RaporCom
     warningText: score.completenessWarning || msg
   };
 }
+
+function stripLeadingTpCodePrefix(rawText: string): string {
+  return String(rawText || '')
+    .trim()
+    .replace(/^(\[?\s*TP\s*\d+(?:\.\d+)*\s*\]?\s*[:\-–.]?\s*)/i, '')
+    .trim();
+}
+
+export interface FormatifFlagDescriptionResult {
+  highestCompetenceDesc: string;
+  lowestCompetenceDesc: string;
+  finalDescription: string;
+  achievedCount: number;
+  needImprovementCount: number;
+  shownCount: number;
+}
+
+/**
+ * Menyusun deskripsi capaian tertinggi & terendah rapor murni dari hasil ketercapaian KKTP (0/1)
+ * dan pengaturan Tampil/Tidak (0/1) pada tiap Tujuan Pembelajaran tanpa menyertakan kode TP.
+ */
+export function composeFormatifDescriptionsFromFlags(params: {
+  objectives: LearningObjective[];
+  kktpMap: Record<string, number>;
+  showMap: Record<string, number>;
+  subjectName?: string;
+}): FormatifFlagDescriptionResult {
+  const { objectives, kktpMap, showMap, subjectName } = params;
+
+  const achievedPhrases: string[] = [];
+  const needImprovementPhrases: string[] = [];
+  let shownCount = 0;
+
+  objectives.forEach((tp) => {
+    const isShow = (showMap?.[tp.id] ?? 1) === 1;
+    if (!isShow) return;
+    shownCount++;
+
+    const rawDesc = stripLeadingTpCodePrefix(tp.description || tp.materi || '');
+    const phrase = cleanTpPhrase({
+      code: '',
+      description: rawDesc || tp.materi || 'kompetensi yang dipelajari'
+    });
+
+    const kktpVal = kktpMap?.[tp.id] ?? 1;
+    if (kktpVal === 1) {
+      achievedPhrases.push(phrase);
+    } else {
+      needImprovementPhrases.push(phrase);
+    }
+  });
+
+  if (shownCount === 0) {
+    return {
+      highestCompetenceDesc: '',
+      lowestCompetenceDesc: '',
+      finalDescription: '',
+      achievedCount: 0,
+      needImprovementCount: 0,
+      shownCount: 0
+    };
+  }
+
+  const subjectSuffix = subjectName ? ` pada mata pelajaran ${subjectName}` : '';
+
+  const highestCompetenceDesc =
+    achievedPhrases.length > 0
+      ? `Menunjukkan penguasaan yang sangat baik dalam hal ${formatIndonesianList(achievedPhrases)}.`
+      : `Sedang berproses membangun pemahaman dasar${subjectSuffix} dan terus didorong meningkatkan capaian kompetensi.`;
+
+  const lowestCompetenceDesc =
+    needImprovementPhrases.length > 0
+      ? `Perlu pendampingan dan peningkatan dalam hal ${formatIndonesianList(needImprovementPhrases)}.`
+      : 'Sudah menunjukkan ketuntasan yang baik pada tujuan pembelajaran yang dinilai.';
+
+  const finalDescription = [highestCompetenceDesc, lowestCompetenceDesc]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ');
+
+  return {
+    highestCompetenceDesc,
+    lowestCompetenceDesc,
+    finalDescription,
+    achievedCount: achievedPhrases.length,
+    needImprovementCount: needImprovementPhrases.length,
+    shownCount
+  };
+}
+

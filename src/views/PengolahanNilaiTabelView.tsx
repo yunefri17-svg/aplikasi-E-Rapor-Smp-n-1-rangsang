@@ -45,7 +45,6 @@ import {
   getAuthorizedSubjectClassIds
 } from '../utils/authorizationGuard';
 import {
-  calculateFormativeAverage,
   filterChaptersForContext,
   filterSummativePlansForContext,
   formatScoreDecimal,
@@ -56,7 +55,10 @@ import {
   normalizeAcademicYearValue,
   normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
-import { filterObjectivesForContext } from '../utils/tpAnalysisAndDescription';
+import {
+  composeFormatifDescriptionsFromFlags,
+  filterObjectivesForContext
+} from '../utils/tpAnalysisAndDescription';
 import {
   buildGuardedSpreadsheetSavePayloads,
   buildSpreadsheetColumns,
@@ -291,7 +293,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     [contextChapters, contextPlans]
   );
 
-  const weights = useMemo(() => resolveSchoolWeights(curricula), [curricula]);
+  const weights = useMemo(
+    () => resolveSchoolWeights(curricula, assessmentPolicy),
+    [curricula, assessmentPolicy]
+  );
   const passingCriteria = selectedSubject?.kkm || weights.passingCriteria;
 
   const targetNormYear = normalizeAcademicYearValue(selectedYear);
@@ -316,6 +321,11 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
   >({});
   const [dirtyStudentIds, setDirtyStudentIds] = useState<Set<string>>(new Set());
   const [showManualColumn, setShowManualColumn] = useState(false);
+  const [editingFormatifStudentId, setEditingFormatifStudentId] = useState<string | null>(null);
+  const [formatifDraftKktp, setFormatifDraftKktp] = useState<Record<string, string>>({});
+  const [formatifDraftShow, setFormatifDraftShow] = useState<Record<string, string>>({});
+  const [formatifDraftHighDesc, setFormatifDraftHighDesc] = useState('');
+  const [formatifDraftLowDesc, setFormatifDraftLowDesc] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [activeImportTab, setActiveImportTab] = useState<'excel_file' | 'quick_text' | 'legacy_template'>('excel_file');
   const [excelFileName, setExcelFileName] = useState('');
@@ -384,14 +394,23 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     targetNormSem
   ]);
 
+  const createEmptyEditState = (): StudentSpreadsheetEditState => ({
+    cellValues: {},
+    sasNonTesValue: '',
+    sasTesValue: '',
+    sasValue: '',
+    manualFinalValue: '',
+    formatifValue: '',
+    kktpValues: {},
+    showValues: {},
+    highestCompetenceDesc: '',
+    lowestCompetenceDesc: '',
+    formatifDirty: false
+  });
+
   const computedRows: ComputedSpreadsheetRow[] = useMemo(() => {
     return contextStudents.map((std) => {
-      const editState = editsByStudentId[std.id] || {
-        cellValues: {},
-        sasValue: '',
-        manualFinalValue: '',
-        formatifValue: ''
-      };
+      const editState = editsByStudentId[std.id] || createEmptyEditState();
       return computeSpreadsheetRowSummary({
         student: std,
         editState,
@@ -418,15 +437,115 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     currentUser
   ]);
 
-  const totalColCount = columns.length + 1 + (showManualColumn ? 1 : 0);
+  const totalSumatifColCount = columns.length + 1 + (showManualColumn ? 1 : 0);
+
+  const openFormatifModal = (studentId: string) => {
+    const cur = editsByStudentId[studentId] || createEmptyEditState();
+    const initKktp: Record<string, string> = {};
+    const initShow: Record<string, string> = {};
+    relevantTPs.forEach((tp) => {
+      initKktp[tp.id] = cur.kktpValues?.[tp.id] ?? '';
+      initShow[tp.id] = cur.showValues?.[tp.id] ?? '';
+    });
+    setFormatifDraftKktp(initKktp);
+    setFormatifDraftShow(initShow);
+    setFormatifDraftHighDesc(cur.highestCompetenceDesc || '');
+    setFormatifDraftLowDesc(cur.lowestCompetenceDesc || '');
+    setEditingFormatifStudentId(studentId);
+  };
+
+  const handleAutoComposeModalDescriptions = () => {
+    if (relevantTPs.length === 0) return;
+    const kktpMap: Record<string, number> = {};
+    const showMap: Record<string, number> = {};
+    relevantTPs.forEach((tp) => {
+      kktpMap[tp.id] = formatifDraftKktp[tp.id] === '0' ? 0 : 1;
+      showMap[tp.id] = formatifDraftShow[tp.id] === '0' ? 0 : 1;
+    });
+    const composed = composeFormatifDescriptionsFromFlags({
+      objectives: relevantTPs,
+      kktpMap,
+      showMap,
+      subjectName: selectedSubject?.name
+    });
+    setFormatifDraftHighDesc(composed.highestCompetenceDesc);
+    setFormatifDraftLowDesc(composed.lowestCompetenceDesc);
+  };
+
+  const handleSaveFormatifModal = () => {
+    if (!editingFormatifStudentId) return;
+    const stdId = editingFormatifStudentId;
+
+    let finalHighDesc = formatifDraftHighDesc;
+    let finalLowDesc = formatifDraftLowDesc;
+    const hasAnyKktpFlag = Object.values(formatifDraftKktp).some((v) => v === '0' || v === '1');
+    if (
+      hasAnyKktpFlag &&
+      !finalHighDesc.trim() &&
+      !finalLowDesc.trim() &&
+      relevantTPs.length > 0
+    ) {
+      const kktpMap: Record<string, number> = {};
+      const showMap: Record<string, number> = {};
+      relevantTPs.forEach((tp) => {
+        kktpMap[tp.id] = formatifDraftKktp[tp.id] === '0' ? 0 : 1;
+        showMap[tp.id] = formatifDraftShow[tp.id] === '0' ? 0 : 1;
+      });
+      const composed = composeFormatifDescriptionsFromFlags({
+        objectives: relevantTPs,
+        kktpMap,
+        showMap,
+        subjectName: selectedSubject?.name
+      });
+      finalHighDesc = composed.highestCompetenceDesc;
+      finalLowDesc = composed.lowestCompetenceDesc;
+    }
+
+    setEditsByStudentId((prev) => {
+      const cur = prev[stdId] || createEmptyEditState();
+      return {
+        ...prev,
+        [stdId]: {
+          ...cur,
+          kktpValues: { ...formatifDraftKktp },
+          showValues: { ...formatifDraftShow },
+          highestCompetenceDesc: finalHighDesc,
+          lowestCompetenceDesc: finalLowDesc,
+          formatifDirty: true
+        }
+      };
+    });
+    setDirtyStudentIds((prev) => {
+      const next = new Set(prev);
+      next.add(stdId);
+      return next;
+    });
+    setEditingFormatifStudentId(null);
+  };
+
+  const normalizeBinaryFlagInput = (raw: string): string => {
+    const cleaned = String(raw ?? '').replace(/[^01]/g, '');
+    if (cleaned === '') return '';
+    return cleaned.slice(-1);
+  };
 
   const updateStudentCell = (
     studentId: string,
-    field: { kind: 'col'; colKey: string } | { kind: 'formatif' } | { kind: 'sas' } | { kind: 'manual' },
+    field:
+      | { kind: 'col'; colKey: string }
+      | { kind: 'formatif' }
+      | { kind: 'sasNonTes' }
+      | { kind: 'sasTes' }
+      | { kind: 'sas' }
+      | { kind: 'manual' }
+      | { kind: 'kktp'; tpId: string }
+      | { kind: 'show'; tpId: string }
+      | { kind: 'highDesc' }
+      | { kind: 'lowDesc' },
     value: string
   ) => {
     setEditsByStudentId((prev) => {
-      const cur = prev[studentId] || { cellValues: {}, sasValue: '', manualFinalValue: '', formatifValue: '' };
+      const cur = prev[studentId] || createEmptyEditState();
       if (field.kind === 'col') {
         return {
           ...prev,
@@ -439,8 +558,57 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
       if (field.kind === 'formatif') {
         return { ...prev, [studentId]: { ...cur, formatifValue: value } };
       }
+      if (field.kind === 'sasNonTes') {
+        return {
+          ...prev,
+          [studentId]: { ...cur, sasNonTesValue: value, sasValue: '' }
+        };
+      }
+      if (field.kind === 'sasTes') {
+        return {
+          ...prev,
+          [studentId]: { ...cur, sasTesValue: value, sasValue: '' }
+        };
+      }
       if (field.kind === 'sas') {
-        return { ...prev, [studentId]: { ...cur, sasValue: value } };
+        return {
+          ...prev,
+          [studentId]: { ...cur, sasNonTesValue: '', sasTesValue: value, sasValue: value }
+        };
+      }
+      if (field.kind === 'kktp') {
+        const flagVal = normalizeBinaryFlagInput(value);
+        return {
+          ...prev,
+          [studentId]: {
+            ...cur,
+            kktpValues: { ...cur.kktpValues, [field.tpId]: flagVal },
+            formatifDirty: true
+          }
+        };
+      }
+      if (field.kind === 'show') {
+        const flagVal = normalizeBinaryFlagInput(value);
+        return {
+          ...prev,
+          [studentId]: {
+            ...cur,
+            showValues: { ...cur.showValues, [field.tpId]: flagVal },
+            formatifDirty: true
+          }
+        };
+      }
+      if (field.kind === 'highDesc') {
+        return {
+          ...prev,
+          [studentId]: { ...cur, highestCompetenceDesc: value, formatifDirty: true }
+        };
+      }
+      if (field.kind === 'lowDesc') {
+        return {
+          ...prev,
+          [studentId]: { ...cur, lowestCompetenceDesc: value, formatifDirty: true }
+        };
       }
       return { ...prev, [studentId]: { ...cur, manualFinalValue: value } };
     });
@@ -451,8 +619,9 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     });
   };
 
+
   const focusCell = (rowIdx: number, colIdx: number) => {
-    if (rowIdx < 0 || rowIdx >= computedRows.length || colIdx < 0 || colIdx >= totalColCount) {
+    if (rowIdx < 0 || rowIdx >= computedRows.length || colIdx < 0 || colIdx >= totalSumatifColCount) {
       return;
     }
     const target = tableContainerRef.current?.querySelector<HTMLInputElement>(
@@ -521,9 +690,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
         if (!canEditRow) return;
 
         const stdId = targetRow.student.id;
-        const cur = next[stdId] || { cellValues: {}, sasValue: '', manualFinalValue: '', formatifValue: '' };
+        const cur = next[stdId] || createEmptyEditState();
         const updatedCellValues = { ...cur.cellValues };
-        let updatedFormatif = cur.formatifValue ?? '';
+        let updatedSasNonTes = cur.sasNonTesValue;
+        let updatedSasTes = cur.sasTesValue;
         let updatedSas = cur.sasValue;
         let updatedManual = cur.manualFinalValue;
 
@@ -534,6 +704,8 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
             updatedCellValues[columns[targetColIdx].key] = strVal;
             appliedCells++;
           } else if (targetColIdx === columns.length) {
+            updatedSasNonTes = '';
+            updatedSasTes = strVal;
             updatedSas = strVal;
             appliedCells++;
           } else if (showManualColumn && targetColIdx === columns.length + 1) {
@@ -543,8 +715,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
         });
 
         next[stdId] = {
+          ...cur,
           cellValues: updatedCellValues,
-          formatifValue: updatedFormatif,
+          sasNonTesValue: updatedSasNonTes,
+          sasTesValue: updatedSasTes,
           sasValue: updatedSas,
           manualFinalValue: updatedManual
         };
@@ -556,7 +730,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     setDirtyStudentIds(updatedStudents);
     setFeedbackBanner({
       type: 'info',
-      text: `Berhasil menempelkan ${appliedCells} sel nilai dari clipboard ke tabel. Klik "Simpan Perubahan ke Server" untuk menyimpan permanen.`
+      text: `Berhasil menempelkan ${appliedCells} sel nilai dari clipboard ke tabel. Klik "Simpan Perubahan" untuk menyimpan permanen.`
     });
   };
 
@@ -604,11 +778,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
           return;
         }
 
-        const currentEdit = next[pr.studentId] || {
-          cellValues: {},
-          sasValue: '',
-          manualFinalValue: ''
-        };
+        const currentEdit = next[pr.studentId] || createEmptyEditState();
 
         const updatedCellValues = { ...currentEdit.cellValues };
         let hasChange = false;
@@ -626,8 +796,26 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
           hasChange = true;
         }
 
+        let updatedSasNonTes = currentEdit.sasNonTesValue;
+        let updatedSasTes = currentEdit.sasTesValue;
         let updatedSas = currentEdit.sasValue;
-        if (pr.importedSas !== undefined) {
+        if (pr.importedSasNonTes !== undefined) {
+          updatedSasNonTes = String(pr.importedSasNonTes);
+          updatedSas = '';
+          hasChange = true;
+        }
+        if (pr.importedSasTes !== undefined) {
+          updatedSasTes = String(pr.importedSasTes);
+          updatedSas = '';
+          hasChange = true;
+        }
+        if (
+          pr.importedSas !== undefined &&
+          pr.importedSasNonTes === undefined &&
+          pr.importedSasTes === undefined
+        ) {
+          updatedSasNonTes = '';
+          updatedSasTes = String(pr.importedSas);
           updatedSas = String(pr.importedSas);
           hasChange = true;
         }
@@ -640,8 +828,11 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
 
         if (hasChange) {
           next[pr.studentId] = {
+            ...currentEdit,
             cellValues: updatedCellValues,
             formatifValue: updatedFormatif,
+            sasNonTesValue: updatedSasNonTes,
+            sasTesValue: updatedSasTes,
             sasValue: updatedSas,
             manualFinalValue: updatedManual
           };
@@ -669,8 +860,12 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     if (!quickTextInput.trim()) return null;
     const targetCol = columns.find((c) => c.key === quickTextTargetKey);
     const targetLabel =
-      quickTextTargetKey === 'sas'
-        ? 'Nilai SAS'
+      quickTextTargetKey === 'sas_nontes'
+        ? 'SAS Non Tes'
+        : quickTextTargetKey === 'sas_tes'
+        ? 'SAS Tes'
+        : quickTextTargetKey === 'sas'
+        ? 'Nilai Akhir SAS'
         : quickTextTargetKey === 'manual'
         ? 'Manual Override'
         : targetCol?.label || 'Nilai';
@@ -702,11 +897,7 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
           return;
         }
 
-        const currentEdit = next[pr.studentId] || {
-          cellValues: {},
-          sasValue: '',
-          manualFinalValue: ''
-        };
+        const currentEdit = next[pr.studentId] || createEmptyEditState();
 
         const updatedCellValues = { ...currentEdit.cellValues };
         let hasChange = false;
@@ -718,8 +909,22 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
           }
         });
 
+        let updatedSasNonTes = currentEdit.sasNonTesValue;
+        let updatedSasTes = currentEdit.sasTesValue;
         let updatedSas = currentEdit.sasValue;
+        if (pr.importedSasNonTes !== undefined) {
+          updatedSasNonTes = String(pr.importedSasNonTes);
+          updatedSas = '';
+          hasChange = true;
+        }
+        if (pr.importedSasTes !== undefined) {
+          updatedSasTes = String(pr.importedSasTes);
+          updatedSas = '';
+          hasChange = true;
+        }
         if (pr.importedSas !== undefined) {
+          updatedSasNonTes = '';
+          updatedSasTes = String(pr.importedSas);
           updatedSas = String(pr.importedSas);
           hasChange = true;
         }
@@ -732,7 +937,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
 
         if (hasChange) {
           next[pr.studentId] = {
+            ...currentEdit,
             cellValues: updatedCellValues,
+            sasNonTesValue: updatedSasNonTes,
+            sasTesValue: updatedSasTes,
             sasValue: updatedSas,
             manualFinalValue: updatedManual
           };
@@ -906,7 +1114,9 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
       'NISN',
       'NAMA_SISWA',
       'REKAP_FORMATIF_KKTP',
-      ...columns.map((c) => (c.subLabel ? `${c.label} (${c.subLabel})` : c.label)),
+      ...columns.map((c, idx) =>
+        c.subLabel ? `BAB ${idx + 1} (${c.subLabel})` : `BAB ${idx + 1}`
+      ),
       'NILAI_SAS',
       'RATA_SUMATIF',
       'NILAI_AKHIR',
@@ -925,17 +1135,13 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
     ];
 
     computedRows.forEach((row, idx) => {
-      const edit = editsByStudentId[row.student.id] || {
-        cellValues: {},
-        sasValue: '',
-        manualFinalValue: '',
-        formatifValue: ''
-      };
-      const kktpMap = row.existingScore?.formatifKktpScores || {};
-      const kktpKeys = Object.keys(kktpMap);
+      const edit = editsByStudentId[row.student.id] || createEmptyEditState();
+      const kktpKeys = relevantTPs
+        .map((tp) => tp.id)
+        .filter((id) => edit.kktpValues?.[id] === '0' || edit.kktpValues?.[id] === '1');
       const kktpSummary =
         kktpKeys.length > 0
-          ? `${kktpKeys.filter((k) => kktpMap[k] === 1).length}/${kktpKeys.length} TP`
+          ? `${kktpKeys.filter((k) => edit.kktpValues?.[k] === '1').length}/${relevantTPs.length || kktpKeys.length} TP`
           : '-';
       aoa.push([
         idx + 1,
@@ -1472,11 +1678,13 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         onChange={(e) => setQuickTextTargetKey(e.target.value)}
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold bg-white"
                       >
-                        <option value="sas">Nilai SAS (Sumatif Akhir Semester)</option>
+                        <option value="sas">Nilai SAS</option>
+                        <option value="sas_tes">SAS Tes</option>
+                        <option value="sas_nontes">SAS Non Tes</option>
                         {showManualColumn && <option value="manual">Manual Override</option>}
-                        {columns.map((col) => (
+                        {columns.map((col, idx) => (
                           <option key={col.key} value={col.key}>
-                            {col.label} {col.subLabel ? `(${col.subLabel})` : ''}
+                            BAB {idx + 1} {col.subLabel ? `(${col.subLabel})` : ''}
                           </option>
                         ))}
                       </select>
@@ -1554,6 +1762,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                               const val =
                                 quickTextTargetKey === 'sas'
                                   ? pr.importedSas
+                                  : quickTextTargetKey === 'sas_nontes'
+                                  ? pr.importedSasNonTes
+                                  : quickTextTargetKey === 'sas_tes'
+                                  ? pr.importedSasTes
                                   : quickTextTargetKey === 'manual'
                                   ? pr.importedManualFinal
                                   : pr.importedScores[quickTextTargetKey];
@@ -1629,74 +1841,270 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
         </div>
       )}
 
-      {/* Spreadsheet Table */}
+      {/* Formatif KKTP (0/1) & Tampil Modal per Siswa */}
+      {editingFormatifStudentId && (() => {
+        const activeRow = computedRows.find((r) => r.student.id === editingFormatifStudentId);
+        const modalLocked =
+          isReadOnly ||
+          Boolean(
+            activeRow?.isProtected && !(currentUser.role === 'admin' && allowAdminOverrideLocked)
+          );
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/60 backdrop-blur-xs">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900">
+                    Rekap Formatif (KKTP 0/1 &amp; Tampil/Tidak) — {activeRow?.student.name || ''}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {selectedSubject?.name || '-'} • {selectedClassroom?.name || '-'} ({selectedYear} {selectedSemester})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingFormatifStudentId(null)}
+                  className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-500 flex items-center justify-center"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-4 text-xs">
+                <div className="p-3 rounded-xl bg-teal-50 border border-teal-200 text-teal-900 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    KKTP: <strong>0</strong> = Belum Mencapai, <strong>1</strong> = Mencapai &nbsp;•&nbsp; Tampil/Tidak: <strong>0</strong> = Tidak Ditampilkan, <strong>1</strong> = Ditampilkan
+                  </span>
+                  {!modalLocked && relevantTPs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleAutoComposeModalDescriptions}
+                      className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Susun Deskripsi Otomatis
+                    </button>
+                  )}
+                </div>
+
+                {relevantTPs.length === 0 ? (
+                  <div className="p-6 text-center rounded-xl border border-dashed border-slate-300 text-slate-500">
+                    Belum ada Tujuan Pembelajaran (TP). Tambahkan TP terlebih dahulu pada menu{' '}
+                    <strong>13. Asesmen Formatif</strong>.
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-xs border-collapse">
+                      <thead className="bg-slate-100 text-slate-700">
+                        <tr>
+                          <th className="border-b px-3 py-2 text-center w-16">TP</th>
+                          <th className="border-b px-3 py-2 text-left">Uraian Tujuan Pembelajaran</th>
+                          <th className="border-b px-3 py-2 text-center w-28">KKTP (0/1)</th>
+                          <th className="border-b px-3 py-2 text-center w-32">Tampil/Tidak (0/1)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {relevantTPs.map((tp, tpIdx) => {
+                          const kVal = formatifDraftKktp[tp.id] ?? '';
+                          const sVal = formatifDraftShow[tp.id] ?? '';
+                          return (
+                            <tr key={tp.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 text-center font-bold text-slate-700">
+                                TP {tpIdx + 1}
+                              </td>
+                              <td className="px-3 py-2 text-slate-800 leading-snug">
+                                {tp.materi && <div className="font-bold text-slate-900">{tp.materi}</div>}
+                                <div>{tp.description}</div>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+                                  {(['0', '1'] as const).map((bit) => (
+                                    <button
+                                      key={bit}
+                                      type="button"
+                                      disabled={modalLocked}
+                                      onClick={() =>
+                                        setFormatifDraftKktp((prev) => ({
+                                          ...prev,
+                                          [tp.id]: prev[tp.id] === bit ? '' : bit
+                                        }))
+                                      }
+                                      className={`px-3 py-1 font-extrabold transition cursor-pointer ${
+                                        kVal === bit
+                                          ? bit === '1'
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-rose-600 text-white'
+                                          : 'bg-white text-slate-600 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {bit}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+                                  {(['0', '1'] as const).map((bit) => (
+                                    <button
+                                      key={bit}
+                                      type="button"
+                                      disabled={modalLocked}
+                                      onClick={() =>
+                                        setFormatifDraftShow((prev) => ({
+                                          ...prev,
+                                          [tp.id]: prev[tp.id] === bit ? '' : bit
+                                        }))
+                                      }
+                                      className={`px-3 py-1 font-extrabold transition cursor-pointer ${
+                                        sVal === bit
+                                          ? bit === '1'
+                                            ? 'bg-sky-600 text-white'
+                                            : 'bg-slate-600 text-white'
+                                          : 'bg-white text-slate-600 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {bit}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Deskripsi Capaian Tertinggi dalam Rapor
+                    </label>
+                    <textarea
+                      rows={3}
+                      disabled={modalLocked}
+                      value={formatifDraftHighDesc}
+                      onChange={(e) => setFormatifDraftHighDesc(e.target.value)}
+                      placeholder="Deskripsi capaian tertinggi..."
+                      className="w-full p-2.5 rounded-xl border border-slate-300 text-xs text-slate-900 bg-white disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Deskripsi Capaian Terendah dalam Rapor
+                    </label>
+                    <textarea
+                      rows={3}
+                      disabled={modalLocked}
+                      value={formatifDraftLowDesc}
+                      onChange={(e) => setFormatifDraftLowDesc(e.target.value)}
+                      placeholder="Deskripsi capaian terendah..."
+                      className="w-full p-2.5 rounded-xl border border-slate-300 text-xs text-slate-900 bg-white disabled:bg-slate-100"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingFormatifStudentId(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  Tutup
+                </button>
+                {!modalLocked && (
+                  <button
+                    type="button"
+                    onClick={handleSaveFormatifModal}
+                    className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs cursor-pointer"
+                  >
+                    Terapkan ke Tabel
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Spreadsheet Table — Clean Single-Row Layout */}
       <div
         ref={tableContainerRef}
-        className="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden"
+        className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
       >
-        <div className="overflow-x-auto max-h-[70vh]">
+        <div className="overflow-x-auto max-h-[72vh]">
           <table className="w-full text-xs border-collapse">
-            <thead className="bg-slate-100 text-slate-800 sticky top-0 z-20">
+            <thead className="bg-slate-50 text-slate-800 sticky top-0 z-20 border-b border-slate-200">
               <tr>
-                <th className="border border-slate-300 px-2.5 py-2.5 text-center w-10 bg-slate-100 sticky left-0 z-30">
+                <th className="border-r border-slate-200 px-3 py-3 text-center w-12 bg-slate-50 sticky left-0 z-30 font-bold">
                   No
                 </th>
-                <th className="border border-slate-300 px-3 py-2.5 text-left min-w-[210px] bg-slate-100 sticky left-10 z-30">
+                <th className="border-r border-slate-200 px-3 py-3 text-left min-w-[210px] bg-slate-50 sticky left-12 z-30 font-bold">
                   Nama Peserta Didik
                 </th>
-                <th className="border border-slate-300 px-2 py-2 text-center min-w-[105px] bg-teal-50 text-teal-900">
-                  Rekap Formatif
-                  <div className="text-[10px] font-normal text-teal-700">
-                    KKTP (0/1) &amp; Tampil
-                  </div>
+                <th className="border-r border-slate-200 px-2.5 py-2.5 text-center min-w-[115px] bg-teal-50/70 text-teal-900 font-bold">
+                  <div>Rekap Formatif</div>
+                  <div className="text-[10px] font-medium text-teal-700">KKTP (0/1) &amp; Tampil</div>
                 </th>
-                {columns.map((col) => (
-                  <th
-                    key={col.key}
-                    className="border border-slate-300 px-2 py-2 text-center min-w-[105px] bg-slate-50"
-                  >
-                    <div className="font-bold text-slate-900">{col.label}</div>
-                    {col.subLabel && (
-                      <div className="text-[10px] font-medium text-slate-500 truncate max-w-[130px] mx-auto">
-                        {col.subLabel}
-                      </div>
-                    )}
+
+                {columns.length === 0 ? (
+                  <th className="border-r border-slate-200 px-3 py-2.5 text-center min-w-[140px] bg-slate-50 text-slate-500 font-medium">
+                    Belum ada BAB
                   </th>
-                ))}
-                <th className="border border-slate-300 px-2 py-2 text-center min-w-[90px] bg-indigo-50 text-indigo-900">
-                  Nilai SAS
-                  <div className="text-[10px] font-normal text-indigo-700">
-                    Tidak Wajib
+                ) : (
+                  columns.map((col, idx) => (
+                    <th
+                      key={col.key}
+                      className="border-r border-slate-200 px-2 py-2.5 text-center min-w-[92px] bg-slate-50"
+                      title={col.subLabel || col.label}
+                    >
+                      <div className="font-extrabold text-slate-900">BAB {idx + 1}</div>
+                      {col.subLabel && (
+                        <div className="text-[10px] font-normal text-slate-500 truncate max-w-[110px] mx-auto">
+                          {col.subLabel}
+                        </div>
+                      )}
+                    </th>
+                  ))
+                )}
+
+                <th className="border-r border-slate-200 px-2.5 py-2.5 text-center min-w-[95px] bg-indigo-50/70 text-indigo-900 font-bold">
+                  <div>Nilai SAS</div>
+                  <div className="text-[10px] font-medium text-indigo-600">
+                    {weights.sasConducted ? 'Tidak Wajib' : 'Nonaktif'}
                   </div>
                 </th>
-                <th className="border border-slate-300 px-2.5 py-2 text-center min-w-[105px] bg-sky-50 text-sky-900">
-                  Rata-rata Sumatif
-                  <div className="text-[10px] font-normal text-sky-700">
-                    Materi + SAS
-                  </div>
+
+                <th className="border-r border-slate-200 px-2.5 py-2.5 text-center min-w-[115px] bg-sky-50/80 text-sky-900 font-bold">
+                  <div>Rata-rata Sumatif</div>
+                  <div className="text-[10px] font-medium text-sky-700">Materi + SAS</div>
                 </th>
+
                 {showManualColumn && (
-                  <th className="border border-slate-300 px-2 py-2 text-center min-w-[95px] bg-amber-50 text-amber-900">
-                    Manual
+                  <th className="border-r border-slate-200 px-2 py-2.5 text-center min-w-[85px] bg-amber-50 text-amber-900 font-bold">
+                    <div>Manual</div>
                     <div className="text-[10px] font-normal text-amber-700">Override</div>
                   </th>
                 )}
-                <th className="border border-slate-300 px-3 py-2 text-center min-w-[95px] bg-emerald-50 text-emerald-900 font-extrabold">
+
+                <th className="border-r border-slate-200 px-3 py-2.5 text-center min-w-[92px] bg-emerald-50/80 text-emerald-950 font-extrabold">
                   Nilai Akhir
                 </th>
-                <th className="border border-slate-300 px-2.5 py-2 text-center w-16 bg-emerald-50 text-emerald-900">
+                <th className="border-r border-slate-200 px-2.5 py-2.5 text-center w-14 bg-slate-50 font-bold">
                   Pred
                 </th>
-                <th className="border border-slate-300 px-3 py-2 text-left min-w-[200px] bg-slate-100">
+                <th className="px-3 py-2.5 text-left min-w-[230px] bg-slate-50 font-bold">
                   Status &amp; Rincian
                 </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-200">
               {computedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8 + columns.length + (showManualColumn ? 1 : 0)}
+                    colSpan={Math.max(1, columns.length) + 8 + (showManualColumn ? 1 : 0)}
                     className="px-6 py-10 text-center text-slate-500"
                   >
                     Belum ada peserta didik aktif pada rombel dan mata pelajaran ini.
@@ -1705,16 +2113,36 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
               ) : (
                 computedRows.map((row, rowIdx) => {
                   const std = row.student;
-                  const edit = editsByStudentId[std.id] || {
-                    cellValues: {},
-                    sasValue: '',
-                    manualFinalValue: '',
-                    formatifValue: ''
-                  };
+                  const edit = editsByStudentId[std.id] || createEmptyEditState();
                   const isDirty = dirtyStudentIds.has(std.id);
                   const rowLocked =
                     isReadOnly ||
                     (row.isProtected && !(currentUser.role === 'admin' && allowAdminOverrideLocked));
+
+                  const kktpKeys = relevantTPs.length
+                    ? relevantTPs
+                        .map((tp) => tp.id)
+                        .filter((id) => edit.kktpValues?.[id] === '0' || edit.kktpValues?.[id] === '1')
+                    : Object.keys(edit.kktpValues || {}).filter(
+                        (id) => edit.kktpValues?.[id] === '0' || edit.kktpValues?.[id] === '1'
+                      );
+                  const totalTpCount = relevantTPs.length || kktpKeys.length;
+                  const kktpTercapaiCount = kktpKeys.filter(
+                    (id) => edit.kktpValues?.[id] === '1'
+                  ).length;
+                  const tampilCount = (relevantTPs.length ? relevantTPs.map((tp) => tp.id) : kktpKeys).filter(
+                    (id) => edit.showValues?.[id] === '1'
+                  ).length;
+                  const hasKktpFilled = kktpKeys.length > 0;
+
+                  const sasDisplayStr = weights.sasConducted
+                    ? edit.sasValue !== ''
+                      ? edit.sasValue
+                      : row.sasScore !== undefined
+                      ? String(row.sasScore)
+                      : ''
+                    : '';
+                  const sasCheck = parseNumericScoreInput(sasDisplayStr);
 
                   return (
                     <tr
@@ -1723,106 +2151,109 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         row.hasInvalidCells
                           ? 'bg-rose-50/70'
                           : isDirty
-                          ? 'bg-amber-50/60'
-                          : rowIdx % 2 === 0
-                          ? 'bg-white hover:bg-slate-50/70'
-                          : 'bg-slate-50/30 hover:bg-slate-50/80'
+                          ? 'bg-amber-50/50'
+                          : 'bg-white hover:bg-slate-50/70'
                       }
                     >
-                      <td className="border border-slate-300 px-2 py-1.5 text-center text-slate-500 font-mono sticky left-0 bg-inherit z-10">
+                      <td className="border-r border-slate-200 px-2.5 py-2.5 text-center text-slate-500 font-mono sticky left-0 bg-inherit z-10">
                         {rowIdx + 1}
                       </td>
-                      <td className="border border-slate-300 px-3 py-1.5 sticky left-10 bg-inherit z-10">
-                        <div className="font-bold text-slate-900 leading-tight">{std.name}</div>
-                        <div className="text-[10px] text-slate-500 font-mono">
+                      <td className="border-r border-slate-200 px-3 py-2.5 sticky left-12 bg-inherit z-10">
+                        <div className="font-extrabold text-slate-900 leading-tight uppercase">
+                          {std.name}
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                           NISN: {std.nisn || '-'}
                         </div>
                       </td>
 
-                      {/* Rekap Formatif (KKTP 0/1 & Tampil, tidak masuk pembobotan angka) */}
-                      <td className="border border-slate-300 px-2 py-1.5 text-center bg-teal-50/20">
-                        {(() => {
-                          const kktpMap = row.existingScore?.formatifKktpScores || {};
-                          const showMap = row.existingScore?.formatifShowScores || {};
-                          const activeKeys =
-                            relevantTPs.length > 0
-                              ? relevantTPs.map((tp) => tp.id).filter((id) => kktpMap[id] !== undefined)
-                              : Object.keys(kktpMap);
-                          if (activeKeys.length === 0) {
-                            return <span className="text-[10px] text-slate-400">Belum diisi</span>;
-                          }
-                          const tercapai = activeKeys.filter((k) => kktpMap[k] === 1).length;
-                          const tampil = activeKeys.filter((k) => (showMap[k] ?? 1) === 1).length;
-                          const totalTarget = relevantTPs.length > 0 ? relevantTPs.length : activeKeys.length;
-                          return (
-                            <div className="leading-tight">
-                              <div className="font-bold text-[11px] text-teal-900">
-                                {tercapai}/{totalTarget} TP
-                              </div>
-                              <div className="text-[10px] text-teal-700">{tampil} tampil</div>
+                      {/* Rekap Formatif (Klik untuk buka modal KKTP 0/1 & Tampil) */}
+                      <td
+                        onClick={() => openFormatifModal(std.id)}
+                        title="Klik untuk mengisi KKTP (0/1), Tampil/Tidak (0/1), & Deskripsi Rapor"
+                        className="border-r border-slate-200 px-2 py-2 text-center bg-teal-50/20 hover:bg-teal-50/70 cursor-pointer transition"
+                      >
+                        {hasKktpFilled ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] font-bold text-teal-800">
+                              {kktpTercapaiCount}/{totalTpCount} TP KKTP
                             </div>
-                          );
-                        })()}
+                            <div className="text-[10px] text-teal-700">{tampilCount} tampil</div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 font-medium hover:text-teal-700">
+                            Belum diisi
+                          </span>
+                        )}
                       </td>
 
-                      {columns.map((col, colIdx) => {
-                        const rawVal = edit.cellValues[col.key] ?? '';
-                        const check = parseNumericScoreInput(rawVal);
-                        const cellColIdx = colIdx;
-                        return (
-                          <td key={col.key} className="border border-slate-300 p-0">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              data-cell={`${rowIdx}:${cellColIdx}`}
-                              disabled={rowLocked}
-                              value={rawVal}
-                              placeholder="-"
-                              onChange={(e) =>
-                                updateStudentCell(std.id, { kind: 'col', colKey: col.key }, e.target.value)
-                              }
-                              onKeyDown={(e) => handleCellKeyDown(e, rowIdx, cellColIdx)}
-                              onPaste={(e) => handleCellPaste(e, rowIdx, cellColIdx)}
-                              className={`w-full h-9 px-2 text-center font-semibold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500 ${
-                                check.error ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500' : ''
-                              }`}
-                            />
-                          </td>
-                        );
-                      })}
-
-                      <td className="border border-slate-300 p-0 bg-indigo-50/20">
-                        {(() => {
-                          const sasColIdx = columns.length;
-                          const sasCheck = parseNumericScoreInput(edit.sasValue);
+                      {/* BAB Columns */}
+                      {columns.length === 0 ? (
+                        <td className="border-r border-slate-200 px-2 py-2 text-center text-slate-400">
+                          -
+                        </td>
+                      ) : (
+                        columns.map((col, colIdx) => {
+                          const rawVal = edit.cellValues[col.key] ?? '';
+                          const check = parseNumericScoreInput(rawVal);
                           return (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              data-cell={`${rowIdx}:${sasColIdx}`}
-                              disabled={rowLocked}
-                              value={edit.sasValue}
-                              placeholder="-"
-                              onChange={(e) =>
-                                updateStudentCell(std.id, { kind: 'sas' }, e.target.value)
-                              }
-                              onKeyDown={(e) => handleCellKeyDown(e, rowIdx, sasColIdx)}
-                              onPaste={(e) => handleCellPaste(e, rowIdx, sasColIdx)}
-                              className={`w-full h-9 px-2 text-center font-bold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-500 ${
-                                sasCheck.error ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500' : ''
-                              }`}
-                            />
+                            <td key={col.key} className="border-r border-slate-200 p-0">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                data-cell={`${rowIdx}:${colIdx}`}
+                                disabled={rowLocked}
+                                value={rawVal}
+                                placeholder="-"
+                                onChange={(e) =>
+                                  updateStudentCell(
+                                    std.id,
+                                    { kind: 'col', colKey: col.key },
+                                    e.target.value
+                                  )
+                                }
+                                onKeyDown={(e) => handleCellKeyDown(e, rowIdx, colIdx)}
+                                onPaste={(e) => handleCellPaste(e, rowIdx, colIdx)}
+                                className={`w-full h-11 px-2 text-center font-semibold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500 ${
+                                  check.error
+                                    ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500'
+                                    : ''
+                                }`}
+                              />
+                            </td>
                           );
-                        })()}
+                        })
+                      )}
+
+                      {/* Nilai SAS */}
+                      <td className="border-r border-slate-200 p-0 bg-indigo-50/20">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          data-cell={`${rowIdx}:${columns.length}`}
+                          disabled={rowLocked || !weights.sasConducted}
+                          value={sasDisplayStr}
+                          placeholder={weights.sasConducted ? '-' : 'Nonaktif'}
+                          onChange={(e) =>
+                            updateStudentCell(std.id, { kind: 'sas' }, e.target.value)
+                          }
+                          onKeyDown={(e) => handleCellKeyDown(e, rowIdx, columns.length)}
+                          onPaste={(e) => handleCellPaste(e, rowIdx, columns.length)}
+                          className={`w-full h-11 px-2 text-center font-bold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-400 ${
+                            sasCheck.error
+                              ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500'
+                              : ''
+                          }`}
+                        />
                       </td>
 
-                      {/* Rata-rata Sumatif (Lingkup Materi + SAS) */}
-                      <td className="border border-slate-300 px-2 py-1.5 text-center font-bold tabular-nums bg-sky-50/30 text-sky-900">
+                      {/* Rata-rata Sumatif (Materi + SAS) */}
+                      <td className="border-r border-slate-200 px-2 py-2 text-center font-extrabold tabular-nums bg-sky-50/40 text-sky-800">
                         {row.sumatifAverage !== undefined ? formatScoreDecimal(row.sumatifAverage) : '--'}
                       </td>
 
                       {showManualColumn && (
-                        <td className="border border-slate-300 p-0 bg-amber-50/20">
+                        <td className="border-r border-slate-200 p-0 bg-amber-50/20">
                           {(() => {
                             const manualColIdx = columns.length + 1;
                             const manualCheck = parseNumericScoreInput(edit.manualFinalValue);
@@ -1839,8 +2270,10 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                                 }
                                 onKeyDown={(e) => handleCellKeyDown(e, rowIdx, manualColIdx)}
                                 onPaste={(e) => handleCellPaste(e, rowIdx, manualColIdx)}
-                                className={`w-full h-9 px-2 text-center font-bold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-amber-500 disabled:bg-slate-100 disabled:text-slate-500 ${
-                                  manualCheck.error ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500' : ''
+                                className={`w-full h-11 px-2 text-center font-bold tabular-nums bg-transparent focus:outline-none focus:ring-2 focus:ring-inset focus:ring-amber-500 disabled:bg-slate-100 disabled:text-slate-500 ${
+                                  manualCheck.error
+                                    ? 'bg-rose-100 text-rose-800 ring-2 ring-inset ring-rose-500'
+                                    : ''
                                 }`}
                               />
                             );
@@ -1848,7 +2281,11 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         </td>
                       )}
 
-                      <td className="border border-slate-300 px-2.5 py-1.5 text-center font-black text-sm tabular-nums bg-emerald-50/35 text-emerald-900">
+                      {/* Nilai Akhir */}
+                      <td
+                        className="border-r border-slate-200 px-2.5 py-2 text-center font-black text-sm tabular-nums bg-emerald-50/40 text-emerald-900"
+                        title={row.breakdownText}
+                      >
                         {row.finalScore !== undefined ? row.finalScore : '--'}
                         {row.rawFinalScore !== undefined && row.rawFinalScore !== row.finalScore && (
                           <div className="text-[10px] font-normal text-slate-500">
@@ -1857,7 +2294,8 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         )}
                       </td>
 
-                      <td className="border border-slate-300 px-2 py-1.5 text-center font-bold">
+                      {/* Predikat */}
+                      <td className="border-r border-slate-200 px-2 py-2 text-center font-bold">
                         {row.predicate ? (
                           <span
                             className={`inline-block px-2 py-0.5 rounded text-[11px] font-extrabold ${
@@ -1877,7 +2315,8 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                         )}
                       </td>
 
-                      <td className="border border-slate-300 px-2.5 py-1.5 text-[11px] leading-snug">
+                      {/* Status & Rincian */}
+                      <td className="px-3 py-2 text-[11px] leading-snug">
                         {row.hasInvalidCells ? (
                           <span className="text-rose-700 font-semibold">
                             {row.invalidMessages[0]}
@@ -1896,7 +2335,8 @@ export const PengolahanNilaiTabelView: React.FC<PengolahanNilaiTabelViewProps> =
                             )}
                             {row.missingComponentNote ? (
                               <div className="text-amber-700">
-                                <span className="font-bold">Belum Lengkap:</span> {row.missingComponentNote}
+                                <span className="font-bold">Belum Lengkap:</span>{' '}
+                                {row.missingComponentNote}
                               </div>
                             ) : (
                               <div className="text-emerald-700 font-bold">Lengkap</div>

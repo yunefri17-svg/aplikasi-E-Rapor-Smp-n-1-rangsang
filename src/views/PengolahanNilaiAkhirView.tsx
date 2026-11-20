@@ -296,7 +296,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
     const subj = subjects.find((s) => s.id === selectedSubjectId);
     const targetNormYear = normalizeAcademicYearValue(academicYear);
     const targetNormSem = normalizeSemesterValue(semester);
-    const weights = resolveSchoolWeights(curricula);
+    const weights = resolveSchoolWeights(curricula, assessmentPolicy);
     const passingCriteria = subj?.kkm || weights.passingCriteria;
 
     return filteredStudents.map((std) => {
@@ -375,9 +375,14 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
       const calcResult = computeStudentReportScore({
         chapters: effectiveChapters,
         chapterScores: useChapters ? chapterScores : tpAverages,
-        sasScore: sasVal,
+        sasScore: weights.sasConducted ? sasVal : undefined,
         formatifScores: existing?.formatifScores,
         manualFinalScore: existing?.manualFinalScore,
+        lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+        sasWeightPercent: weights.configuredSasWeightPercent,
+        sasConducted: weights.sasConducted,
+        sasNotConductedPolicy: weights.sasNotConductedPolicy,
+        assessmentPolicy,
         passingCriteria,
         legacyMateriScores: useChapters ? {} : tpAverages
       });
@@ -620,7 +625,7 @@ export const PengolahanNilaiAkhirView: React.FC<PengolahanNilaiAkhirViewProps> =
           })}
           scores={scores}
           summativeAssessments={summativeAssessments}
-          weights={resolveSchoolWeights(curricula)}
+          weights={resolveSchoolWeights(curricula, assessmentPolicy)}
           currentUser={currentUser}
           isReadOnly={isReadOnly}
           onConfirmImport={(payload) => {

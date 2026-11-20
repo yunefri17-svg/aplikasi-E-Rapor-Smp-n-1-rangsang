@@ -307,8 +307,8 @@ export interface AssessmentScore {
   hasMissingComponents?: boolean; // True when any BAB or SAS is still empty
   missingComponentNote?: string; // Warning note detailing missing BABs / SAS
   finalScore: number;
-  formatifAverage?: number; // Computed average of formative assessments (50% weight)
-  sumatifAverage?: number; // Computed average of all summative components including SAS (50% weight)
+  formatifAverage?: number; // Legacy historical field (if present on archived scores)
+  sumatifAverage?: number; // Computed average of summative components
   rawFinalScore?: number; // Exact decimal final score before rounding (e.g. 79.38)
   completenessStatus?: 'LENGKAP' | 'BELUM_LENGKAP';
   finalScoreStatus?:
@@ -487,6 +487,8 @@ export interface SubjectFinalScoreConfig {
   sasWeight?: number; // Weight for Summative Akhir Semester
 }
 
+export type SasNotConductedPolicy = 'lingkup_materi_100' | 'keep_weight_mark_incomplete';
+
 export interface AssessmentPolicyConfig {
   id: 'assessment_policy';
   optimalMinScore: number; // Default 88 -> TP dicapai optimal
@@ -496,7 +498,11 @@ export interface AssessmentPolicyConfig {
   usePerTpKktpIfConfigured: boolean; // Default true
   formulaPolicyMode: 'existing_default' | 'confirmed_custom';
   confirmedFormulaNote?: string;
-  includeFormativeInFinalScore: boolean; // Default false (formatif tidak mengubah bobot angka kecuali dikonfirmasi admin)
+  includeFormativeInFinalScore: boolean; // Default false (formatif tidak mengubah bobot angka rapor)
+  lingkupMateriWeightPercent?: number; // Default 70%
+  sasWeightPercent?: number; // Default 30%
+  sasConducted?: boolean; // Default true -> apakah SAS dilaksanakan pada periode aktif
+  sasNotConductedPolicy?: SasNotConductedPolicy; // Kebijakan saat SAS tidak dilaksanakan
   isInputLocked: boolean; // Kunci global periode aktif
   lockedPeriods?: Record<string, boolean>; // e.g. "2026/2027_Ganjil": true
   lockedMessage?: string;

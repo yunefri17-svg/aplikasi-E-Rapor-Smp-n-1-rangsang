@@ -284,7 +284,10 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
   const currentClass = classrooms.find((c) => c.id === selectedClass);
   const currentSubjectObj = subjects.find((s) => s.id === selectedSubject);
   const currentGrade = currentClass?.gradeLevel || '7';
-  const weights = useMemo(() => resolveSchoolWeights(curricula), [curricula]);
+  const weights = useMemo(
+    () => resolveSchoolWeights(curricula, assessmentPolicy),
+    [curricula, assessmentPolicy]
+  );
   const passingCriteria = currentSubjectObj?.kkm || weights.passingCriteria;
 
   const isElectiveActiveSubject = isElectiveSubject(currentSubjectObj);
@@ -483,9 +486,14 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
     return computeStudentReportScore({
       chapters: chapterDescriptors,
       chapterScores: effectiveChapterScores,
-      sasScore: params.sasScore,
+      sasScore: weights.sasConducted ? params.sasScore : undefined,
       formatifScores: params.formatifScores,
       manualFinalScore: params.manualFinalScore,
+      lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+      sasWeightPercent: weights.configuredSasWeightPercent,
+      sasConducted: weights.sasConducted,
+      sasNotConductedPolicy: weights.sasNotConductedPolicy,
+      assessmentPolicy,
       passingCriteria,
       legacyMateriScores: classUseChaptersMode ? {} : params.sumatifMateriScores
     });
@@ -1570,7 +1578,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
           })}
           scores={scores}
           summativeAssessments={summativeAssessments}
-          weights={resolveSchoolWeights(curricula)}
+          weights={weights}
           currentUser={currentUser}
           isReadOnly={isReadOnly}
           onConfirmImport={(payload) => {
@@ -1756,7 +1764,7 @@ export const InputNilaiView: React.FC<InputNilaiViewProps> = ({
               Daftar TP Mapel ({relevantTPs.length})
             </button>
             <div className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
-              Rumus: Nilai Rapor = NA Sumatif Lingkup Materi + SAS (Formatif untuk KKTP & Deskripsi)
+              Rumus Aktif: {weights.formulaLabel}
             </div>
             <div className="text-slate-500 font-semibold">{classStudents.length} Siswa</div>
           </div>

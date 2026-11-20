@@ -139,6 +139,7 @@ import { ImporEksporDapodikView } from './views/ImporEksporDapodikView';
 import { ManajemenWaliKelasView } from './views/ManajemenWaliKelasView';
 import { ManajemenPenggunaView } from './views/ManajemenPenggunaView';
 import { PengaturanAplikasiView } from './views/PengaturanAplikasiView';
+import { PengaturanBobotNilaiView } from './views/PengaturanBobotNilaiView';
 import { ManajemenTahunAjaranView } from './views/ManajemenTahunAjaranView';
 import { BukuIndukView } from './views/BukuIndukView';
 import { TranskripNilaiView } from './views/TranskripNilaiView';
@@ -292,7 +293,17 @@ export default function App() {
     return resolveTeacherForUser(currentUser, db.teachers);
   }, [db.teachers, currentUser]);
 
-  const hasHomeroomDuty = Boolean(currentUser?.classId || currentTeacher?.isHomeroom);
+  const homeroomClass = React.useMemo(() => {
+    if (!currentUser) return undefined;
+    const cId = currentUser.classId || currentTeacher?.homeroomClassId;
+    if (cId) return db.classrooms.find((c) => c.id === cId);
+    if (currentTeacher?.id) {
+      return db.classrooms.find((c) => c.homeroomTeacherId === currentTeacher.id);
+    }
+    return undefined;
+  }, [currentUser, currentTeacher, db.classrooms]);
+
+  const hasHomeroomDuty = Boolean(currentUser?.classId || currentTeacher?.isHomeroom || homeroomClass);
   const hasTeachingDuties = React.useMemo(() => {
     if (!currentTeacher) return false;
     const hasAssignments = (db.teachingAssignments || []).some(
@@ -306,12 +317,6 @@ export default function App() {
     hasHomeroomDuty && hasTeachingDuties && currentUser && currentUser.role !== 'admin' && currentUser.role !== 'kepsek'
   );
 
-  const homeroomClass = React.useMemo(() => {
-    if (!currentUser) return undefined;
-    const cId = currentUser.classId || currentTeacher?.homeroomClassId;
-    return db.classrooms.find((c) => c.id === cId);
-  }, [currentUser, currentTeacher, db.classrooms]);
-
   // Effective User with active role depending on current duty mode
   const effectiveUser: User = React.useMemo(() => {
     if (!currentUser) {
@@ -324,18 +329,21 @@ export default function App() {
       };
     }
     let base = currentUser;
-    // Auto-link teacherId if missing but teacher found by name/nip
+    // Auto-link teacherId and homeroom classId if missing on user record
     if (!base.teacherId && currentTeacher) {
       base = { ...base, teacherId: currentTeacher.id };
     }
-    
+    if (!base.classId && homeroomClass?.id) {
+      base = { ...base, classId: homeroomClass.id };
+    }
+
     if (!canSwitchDutyMode) return base;
     return {
       ...base,
       role: dutyMode,
       activeDutyMode: dutyMode
     };
-  }, [canSwitchDutyMode, currentUser, dutyMode, currentTeacher, db.users]);
+  }, [canSwitchDutyMode, currentUser, dutyMode, currentTeacher, homeroomClass, db.users]);
 
   // Modal for quick academic year switch
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
@@ -846,21 +854,51 @@ export default function App() {
 
   // Handlers for Students
   const handleSaveStudent = (student: Student) => {
-    removeDeletedEntityId('students', student.id);
+    let studentToSave = student;
+    if (effectiveUser.role === 'walikelas') {
+      const authorizedClassId = effectiveUser.classId || homeroomClass?.id;
+      const existingStudent = db.students.find((s) => s.id === student.id);
+      if (!existingStudent || !authorizedClassId || existingStudent.classId !== authorizedClassId) {
+        pushAlert(
+          'error',
+          'Akses ditolak: Wali Kelas hanya dapat mengedit data siswa di kelas perwaliannya.'
+        );
+        return;
+      }
+      // Preserve rombel & status when edited by Wali Kelas
+      studentToSave = {
+        ...student,
+        classId: existingStudent.classId,
+        status: existingStudent.status
+      };
+    } else if (effectiveUser.role !== 'admin') {
+      pushAlert('error', 'Akses ditolak: Anda tidak memiliki hak akses untuk mengubah data siswa.');
+      return;
+    }
+
+    removeDeletedEntityId('students', studentToSave.id);
     updateDbAndSave((prev) => {
-      const idx = prev.students.findIndex((s) => s.id === student.id);
+      const idx = prev.students.findIndex((s) => s.id === studentToSave.id);
       let newStudents = [...prev.students];
       if (idx >= 0) {
-        newStudents[idx] = student;
+        newStudents[idx] = studentToSave;
       } else {
-        newStudents.push(student);
+        newStudents.push(studentToSave);
       }
       return { ...prev, students: newStudents };
-    }, false, { collection: 'students', id: student.id, data: student });
-    logActivity(currentUser, 'Simpan Siswa', `Menyimpan data peserta didik: ${student.name}`);
+    }, false, { collection: 'students', id: studentToSave.id, data: studentToSave });
+    logActivity(
+      currentUser,
+      'Simpan Siswa',
+      `Menyimpan data peserta didik: ${studentToSave.name}${effectiveUser.role === 'walikelas' ? ' (oleh Wali Kelas)' : ''}`
+    );
   };
 
   const handleDeleteStudent = async (studentId: string) => {
+    if (effectiveUser.role !== 'admin') {
+      pushAlert('error', 'Akses ditolak: Hanya Administrator yang dapat menghapus data siswa.');
+      return;
+    }
     addDeletedEntityId('students', studentId);
     updateDbAndSave((prev) => ({
       ...prev,
@@ -1013,7 +1051,10 @@ export default function App() {
     return { success: true };
   };
 
-  const handleDeleteObjective = async (objId: string): Promise<{ success: boolean; error?: string }> => {
+  const handleDeleteObjective = async (
+    objId: string,
+    options?: { force?: boolean }
+  ): Promise<{ success: boolean; error?: string }> => {
     const targetTp = db.learningObjectives.find((o) => o.id === objId);
     if (targetTp) {
       const authRes = authorizeSubjectAssessmentWrite({
@@ -1042,7 +1083,7 @@ export default function App() {
       summativeAssessments: db.summativeAssessments,
       scores: db.scores
     });
-    if (usage.inUse) {
+    if (usage.inUse && !options?.force) {
       const msg = usage.reason || 'TP sedang dipakai oleh data asesmen atau nilai rapor.';
       pushAlert('error', msg);
       return { success: false, error: msg };
@@ -1335,7 +1376,8 @@ export default function App() {
     const adminAuth = authorizeSensitiveAdminAction({
       user: currentUser,
       authContext,
-      actionLabel: 'perubahan kebijakan penilaian & penguncian periode'
+      actionLabel: 'perubahan kebijakan penilaian & bobot nilai rapor',
+      allowBoundAdminFallback: true
     });
     if (!adminAuth.allowed) {
       pushAlert('error', adminAuth.reason || 'Hanya Administrator terverifikasi yang dapat mengubah kebijakan penilaian.');
@@ -1720,7 +1762,8 @@ export default function App() {
   };
 
   const handleDeleteLearningChapter = async (
-    chapterId: string
+    chapterId: string,
+    options?: { force?: boolean }
   ): Promise<{ success: boolean; error?: string }> => {
     const existing = (db.learningChapters || []).find((ch) => ch.id === chapterId);
     if (existing) {
@@ -1748,7 +1791,7 @@ export default function App() {
       summativeAssessments: db.summativeAssessments,
       scores: db.scores
     });
-    if (usage.inUse) {
+    if (usage.inUse && !options?.force) {
       const msg = usage.reason || 'BAB masih digunakan pada rencana sumatif atau nilai siswa.';
       pushAlert('error', msg);
       return { success: false, error: msg };
@@ -2122,7 +2165,7 @@ export default function App() {
           };
         }
 
-        const weights = resolveSchoolWeights(prev.curricula);
+        const weights = resolveSchoolWeights(prev.curricula, prev.assessmentPolicy);
         const contextChapters = filterChaptersForContext(prev.learningChapters || [], {
           subjectId: sa.subjectId,
           classId: sa.classId,
@@ -2148,11 +2191,14 @@ export default function App() {
         const calcResult = computeStudentReportScore({
           chapters: contextChapters,
           chapterScores: updatedChapterScores,
-          sasScore: getEffectiveSasScore(existingScore),
+          sasScore: weights.sasConducted ? getEffectiveSasScore(existingScore) : undefined,
           formatifScores: existingScore?.formatifScores,
           manualFinalScore: existingScore?.manualFinalScore,
-          formatifWeightPercent: weights.formatifWeightPercent,
-          sumatifWeightPercent: weights.sumatifWeightPercent,
+          lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+          sasWeightPercent: weights.configuredSasWeightPercent,
+          sasConducted: weights.sasConducted,
+          sasNotConductedPolicy: weights.sasNotConductedPolicy,
+          assessmentPolicy: prev.assessmentPolicy,
           passingCriteria: weights.passingCriteria,
           legacyMateriScores: contextChapters.length > 0 ? undefined : mergedLegacyMateri
         });
@@ -2178,7 +2224,14 @@ export default function App() {
               chapterScores: updatedChapterScores,
               sumatifMateriScores: mergedLegacyMateri,
               babAverage: calcResult.babAverage,
+              babWeightPercent: calcResult.effectiveBabWeightPercent,
+              sasWeightPercent: calcResult.effectiveSasWeightPercent,
               sumatifAverage: calcResult.sumatifAverage,
+              rawFinalScore: calcResult.rawFinalScore,
+              finalScoreBreakdown: calcResult.breakdownText,
+              completenessStatus: calcResult.completenessStatus,
+              hasMissingComponents: calcResult.hasMissingComponents,
+              missingComponentNote: calcResult.missingComponentNote,
               finalScore: resolvedFinalScore,
               predicate: pred,
               descriptionStatus: isManualOrLockedDesc
@@ -2777,8 +2830,15 @@ export default function App() {
               subjects={db.subjects}
               students={db.students}
               learningObjectives={db.learningObjectives}
+              learningChapters={db.learningChapters || EMPTY_ARRAY}
+              summativePlans={db.summativePlans || EMPTY_ARRAY}
+              formativeAssessments={db.formativeAssessments || EMPTY_ARRAY}
+              summativeAssessments={db.summativeAssessments || EMPTY_ARRAY}
               scores={db.scores}
               onSaveScores={handleSaveScores}
+              onSaveObjective={handleSaveObjective}
+              onDeleteObjective={handleDeleteObjective}
+              onNavigateToSpreadsheet={() => handleSelectMenu('pengolahan-nilai-tabel')}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               teachers={db.teachers}
@@ -2794,6 +2854,7 @@ export default function App() {
               classrooms={db.classrooms}
               subjects={db.subjects}
               students={db.students}
+              curricula={db.curricula}
               learningObjectives={db.learningObjectives}
               learningChapters={db.learningChapters || EMPTY_ARRAY}
               summativePlans={db.summativePlans || EMPTY_ARRAY}
@@ -2802,6 +2863,7 @@ export default function App() {
               onSaveScores={handleSaveScores}
               onSaveLearningChapter={handleSaveLearningChapter}
               onDeleteLearningChapter={handleDeleteLearningChapter}
+              onNavigateToSpreadsheet={() => handleSelectMenu('pengolahan-nilai-tabel')}
               currentUser={effectiveUser}
               teachingAssignments={db.teachingAssignments || EMPTY_ARRAY}
               teachers={db.teachers}
@@ -3252,6 +3314,16 @@ export default function App() {
             )
           )}
 
+          {activeMenu === 'pengaturan-bobot-nilai' && (
+            <PengaturanBobotNilaiView
+              assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
+              currentUser={effectiveUser}
+              academicYear={db.schoolProfile.activeAcademicYear}
+              semester={db.schoolProfile.activeSemester}
+              onSaveAssessmentPolicy={handleSaveAssessmentPolicy}
+            />
+          )}
+
           {activeMenu === 'pengaturan-aplikasi' && (
             effectiveUser.role === 'admin' || effectiveUser.role === 'kepsek' ? (
               <PengaturanAplikasiView
@@ -3265,6 +3337,8 @@ export default function App() {
                 currentUser={effectiveUser}
                 db={db}
                 onApplyRemoteData={handleApplyRemoteData}
+                assessmentPolicy={db.assessmentPolicy || DEFAULT_ASSESSMENT_POLICY}
+                onSaveAssessmentPolicy={handleSaveAssessmentPolicy}
               />
             ) : (
               <SecurityAccessDenied

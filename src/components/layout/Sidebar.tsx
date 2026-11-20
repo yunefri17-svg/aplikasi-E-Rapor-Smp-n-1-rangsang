@@ -28,6 +28,7 @@ import {
   Compass,
   Layers,
   Upload,
+  Scale,
   X
 } from 'lucide-react';
 import { UserRole } from '../../types/erapor';
@@ -75,6 +76,7 @@ export type MenuId =
   | 'kokurikuler-rekap-siswa'
   | 'kokurikuler-rekap-kelompok'
   | 'kokurikuler-cetak'
+  | 'pengaturan-bobot-nilai'
   | 'pengaturan-aplikasi';
 
 interface SidebarProps {
@@ -189,6 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'impor-ekspor', label: '21. Impor & Ekspor Dapodik', icon: ArrowUpDown, roles: ['admin'] },
         { id: 'manajemen-wali-kelas', label: '22. Manajemen Akun Wali Kelas', icon: UserCheck, roles: ['admin'] },
         { id: 'manajemen-pengguna', label: '23. Manajemen Pengguna', icon: ShieldAlert, roles: ['admin'] },
+        { id: 'pengaturan-bobot-nilai', label: 'PENGATURAN BOBOT NILAI RAPOR', icon: Scale, roles: ['admin', 'guru', 'walikelas', 'kepsek'] },
         { id: 'pengaturan-aplikasi', label: '24. Pengaturan Aplikasi', icon: Settings, roles: ['admin', 'kepsek'] }
       ]
     }

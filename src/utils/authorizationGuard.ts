@@ -301,8 +301,9 @@ export function authorizeSensitiveAdminAction(params: {
   user: User | null | undefined;
   authContext?: AuthSessionContext | null;
   actionLabel?: string;
+  allowBoundAdminFallback?: boolean;
 }): AuthorizationResult {
-  const { user, authContext, actionLabel = 'perubahan kebijakan/akun' } = params;
+  const { user, authContext, actionLabel = 'perubahan kebijakan/akun', allowBoundAdminFallback = false } = params;
   if (!user || user.status === 'inactive') {
     return { allowed: false, readOnly: true, reason: 'Pengguna tidak aktif.' };
   }
@@ -314,6 +315,10 @@ export function authorizeSensitiveAdminAction(params: {
     };
   }
   if (authContext?.verificationStatus === 'unverified_anonymous_fallback') {
+    const isBoundAdmin = Boolean(!authContext.boundUserId || authContext.boundUserId === user.id);
+    if (allowBoundAdminFallback && isBoundAdmin) {
+      return { allowed: true, readOnly: false, isUnverifiedFallback: true };
+    }
     return {
       allowed: false,
       readOnly: true,
@@ -466,10 +471,12 @@ export function checkLearningObjectiveInUse(params: {
       (sc.selectedOptimalTpIds || []).includes(tpId) ||
       (sc.selectedImprovementTpIds || []).includes(tpId) ||
       (sc.learningObjectiveIds || []).includes(tpId) ||
+      Boolean(sc.formatifKktpScores && Object.prototype.hasOwnProperty.call(sc.formatifKktpScores, tpId)) ||
+      Boolean(sc.formatifShowScores && Object.prototype.hasOwnProperty.call(sc.formatifShowScores, tpId)) ||
       Boolean(sc.sumatifMateriScores && Object.prototype.hasOwnProperty.call(sc.sumatifMateriScores, tpId))
   );
   if (usedScores.length > 0) {
-    refs.push(`${usedScores.length} nilai/deskripsi rapor siswa`);
+    refs.push(`${usedScores.length} data formatif/deskripsi/nilai siswa`);
   }
 
   return {
@@ -477,7 +484,7 @@ export function checkLearningObjectiveInUse(params: {
     references: refs,
     reason:
       refs.length > 0
-        ? `TP tidak dapat dihapus karena sedang digunakan pada: ${refs.join('; ')}.`
+        ? `TP ini masih terhubung dengan data penilaian: ${refs.join('; ')}. Menghapus master TP tidak akan menghapus arsip nilai rapor lama.`
         : undefined
   };
 }
@@ -505,7 +512,9 @@ export function checkLearningChapterInUse(params: {
   }
 
   const usedScores = scores.filter(
-    (sc) => sc.chapterScores && Object.prototype.hasOwnProperty.call(sc.chapterScores, chapterId)
+    (sc) =>
+      Boolean(sc.chapterScores && Object.prototype.hasOwnProperty.call(sc.chapterScores, chapterId)) ||
+      Boolean(sc.sumatifMateriScores && Object.prototype.hasOwnProperty.call(sc.sumatifMateriScores, chapterId))
   );
   if (usedScores.length > 0) {
     refs.push(`${usedScores.length} rekap nilai rapor siswa`);
@@ -516,7 +525,7 @@ export function checkLearningChapterInUse(params: {
     references: refs,
     reason:
       refs.length > 0
-        ? `BAB tidak dapat dihapus karena masih digunakan pada: ${refs.join('; ')}. Hapus atau lepaskan tautannya terlebih dahulu jika memang tidak terpakai.`
+        ? `BAB ini masih digunakan pada data penilaian: ${refs.join('; ')}. Menghapus master BAB tidak akan menghapus nilai atau arsip rapor lama.`
         : undefined
   };
 }

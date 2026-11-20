@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Student, Classroom, User } from '../types/erapor';
 import {
   GraduationCap,
@@ -38,12 +38,17 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
   onNavigateToImport,
   currentUser
 }) => {
+  const isAdmin = currentUser.role === 'admin';
   const isWaliKelas = currentUser.role === 'walikelas';
-  const authorizedClass = classrooms.find((c) => c.id === currentUser.classId);
+  const authorizedClassId = currentUser.classId || '';
+  const authorizedClass = classrooms.find((c) => c.id === authorizedClassId);
+  const canShowActionColumn = isAdmin || (isWaliKelas && Boolean(authorizedClassId));
+  const canEditStudent = (std: Student) =>
+    isAdmin || (isWaliKelas && Boolean(authorizedClassId) && std.classId === authorizedClassId);
 
   const [search, setSearch] = useState('');
   const [filterClass, setFilterClass] = useState<string>(
-    isWaliKelas && currentUser.classId ? currentUser.classId : 'all'
+    isWaliKelas ? authorizedClassId || '__unassigned__' : 'all'
   );
   const [filterGender, setFilterGender] = useState<string>('all');
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -52,9 +57,21 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  // Security check: if Wali Kelas attempts to access another class
-  const isUnauthorized = isWaliKelas && filterClass !== 'all' && filterClass !== currentUser.classId;
-  const attemptedClass = isUnauthorized ? classrooms.find((c) => c.id === filterClass) : null;
+  useEffect(() => {
+    if (isWaliKelas) {
+      setFilterClass(authorizedClassId || '__unassigned__');
+    } else if (filterClass === '__unassigned__') {
+      setFilterClass('all');
+    }
+  }, [isWaliKelas, authorizedClassId]);
+
+  // Security check: if Wali Kelas has no assigned class or attempts to access another class
+  const isUnauthorized =
+    isWaliKelas && (!authorizedClassId || filterClass !== authorizedClassId);
+  const attemptedClass =
+    isUnauthorized && filterClass !== '__unassigned__'
+      ? classrooms.find((c) => c.id === filterClass)
+      : null;
 
   if (isUnauthorized) {
     return (
@@ -62,7 +79,14 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
         currentUser={currentUser}
         authorizedClassroom={authorizedClass}
         targetClassroom={attemptedClass}
-        onResetToAuthorizedClass={() => setFilterClass(currentUser.classId || 'all')}
+        customMessage={
+          !authorizedClassId
+            ? 'Akun Wali Kelas Anda belum ditautkan ke rombel manapun. Hubungi Administrator untuk menautkan kelas perwalian.'
+            : undefined
+        }
+        onResetToAuthorizedClass={
+          authorizedClassId ? () => setFilterClass(authorizedClassId) : undefined
+        }
       />
     );
   }
@@ -128,6 +152,7 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
   };
 
   const handleOpenEdit = (s: Student) => {
+    if (!canEditStudent(s)) return;
     const normalizedDob = normalizeDateToIso(s.dob);
     setOriginalRawDob(s.dob || '');
     setEditingStudent({ ...s, dob: normalizedDob });
@@ -166,6 +191,11 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
           <p className="text-xs text-slate-500 mt-0.5">
             Manajemen data induk siswa resmi Dapodik SMP Negeri 1 Rangsang, NISN, rombel, dan biodata keluarga.
           </p>
+          {isWaliKelas && authorizedClass && (
+            <p className="text-[11px] font-semibold text-blue-700 mt-1">
+              Akses Wali Kelas ({authorizedClass.name}): Anda dapat mengedit biodata, data orang tua, dan identitas Buku Induk/Rapor siswa pada kelas perwalian Anda.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -261,7 +291,7 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                 <th className="px-4 py-3">Kelas / Rombel</th>
                 <th className="px-4 py-3">Nama Orang Tua</th>
                 <th className="px-4 py-3 text-center">Status</th>
-                {currentUser.role === 'admin' && (
+                {canShowActionColumn && (
                   <th className="px-4 py-3 text-right">Aksi</th>
                 )}
               </tr>
@@ -269,7 +299,7 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={canShowActionColumn ? 9 : 8} className="px-4 py-8 text-center text-slate-400">
                     Tidak ada data peserta didik yang cocok dengan filter pencarian.
                   </td>
                 </tr>
@@ -320,22 +350,26 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                         {std.status}
                       </span>
                     </td>
-                    {currentUser.role === 'admin' && (
+                    {canShowActionColumn && (
                       <td className="px-4 py-3 text-right space-x-1">
-                        <button
-                          onClick={() => handleOpenEdit(std)}
-                          className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 transition"
-                          title="Edit Siswa"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirmId(std.id)}
-                          className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 transition"
-                          title="Hapus Siswa"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {canEditStudent(std) && (
+                          <button
+                            onClick={() => handleOpenEdit(std)}
+                            className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 transition"
+                            title="Edit Biodata Siswa"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => setDeleteConfirmId(std.id)}
+                            className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 transition"
+                            title="Hapus Siswa"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -490,12 +524,20 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                   <select
                     value={editingStudent.classId}
                     onChange={(e) => setEditingStudent({ ...editingStudent, classId: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-bold"
+                    disabled={isWaliKelas}
+                    className={`w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-bold ${
+                      isWaliKelas ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''
+                    }`}
                   >
                     {sortedAllClassrooms.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
+                  {isWaliKelas && (
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      Perpindahan rombel hanya dapat dilakukan oleh Administrator.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -503,13 +545,21 @@ export const DataSiswaView: React.FC<DataSiswaViewProps> = ({
                   <select
                     value={editingStudent.status}
                     onChange={(e) => setEditingStudent({ ...editingStudent, status: e.target.value as any })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                    disabled={isWaliKelas}
+                    className={`w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                      isWaliKelas ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''
+                    }`}
                   >
                     <option value="Aktif">Aktif</option>
                     <option value="Mutasi">Mutasi Keluar</option>
                     <option value="Lulus">Lulus</option>
                     <option value="Keluar">Keluar</option>
                   </select>
+                  {isWaliKelas && (
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      Perubahan status keaktifan/mutasi dikelola oleh Administrator.
+                    </p>
+                  )}
                 </div>
 
                 <div className="sm:col-span-2">

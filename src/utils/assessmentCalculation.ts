@@ -1,13 +1,16 @@
 import {
+  AssessmentPolicyConfig,
   AssessmentScore,
   Curriculum,
   LearningChapter,
   LearningObjective,
+  SasNotConductedPolicy,
   SummativeAssessment,
   SummativeAssessmentPlan
 } from '../types/erapor';
 import { calculatePredicate } from '../services/storage';
 import { normalizeAcademicYearValue, normalizeSemesterValue } from './electiveSubjectHelper';
+import { normalizeAssessmentPolicy } from './tpAnalysisAndDescription';
 
 export function sanitizePeriodSegment(val?: string | null): string {
   return String(val || '')
@@ -147,26 +150,59 @@ export function suggestNextTpCode(
 }
 
 export interface ResolvedSchoolWeights {
-  formatifWeightPercent: number; // e.g. 50%
-  sumatifWeightPercent: number; // e.g. 50%
-  babWeightPercent: number; // Backward compatibility alias
-  sasWeightPercent: number; // Backward compatibility alias
+  formatifWeightPercent: number; // Always 0% under Kurikulum Merdeka E-Rapor formula
+  sumatifWeightPercent: number; // Always 100%
+  configuredLingkupMateriWeightPercent: number; // Admin-configured (default 70%)
+  configuredSasWeightPercent: number; // Admin-configured (default 30%)
+  lingkupMateriWeightPercent: number; // Effective Lingkup Materi weight %
+  babWeightPercent: number; // Effective Lingkup Materi weight % alias
+  sasWeightPercent: number; // Effective SAS weight %
+  sasConducted: boolean;
+  sasNotConductedPolicy: SasNotConductedPolicy;
   passingCriteria: number;
   curriculumId: string;
   formulaLabel: string;
 }
 
-export function resolveSchoolWeights(curricula: Curriculum[] = []): ResolvedSchoolWeights {
+export function resolveSchoolWeights(
+  curricula: Curriculum[] = [],
+  assessmentPolicy?: Partial<AssessmentPolicyConfig> | null
+): ResolvedSchoolWeights {
   const curMerdeka = curricula.find((c) => c.id === 'cur-merdeka') || curricula[0];
+  const policy = normalizeAssessmentPolicy(assessmentPolicy);
+
+  const configuredLingkup = policy.lingkupMateriWeightPercent ?? 70;
+  const configuredSas = policy.sasWeightPercent ?? 30;
+  const sasConducted = policy.sasConducted ?? true;
+  const sasNotConductedPolicy = policy.sasNotConductedPolicy ?? 'lingkup_materi_100';
+
+  const effectiveLingkup =
+    !sasConducted && sasNotConductedPolicy === 'lingkup_materi_100' ? 100 : configuredLingkup;
+  const effectiveSas =
+    !sasConducted && sasNotConductedPolicy === 'lingkup_materi_100' ? 0 : configuredSas;
+
+  let formulaLabel = `Nilai Rapor = (${effectiveLingkup}% × NA Sumatif Lingkup Materi) + (${effectiveSas}% × Nilai SAS)`;
+  if (!sasConducted && sasNotConductedPolicy === 'lingkup_materi_100') {
+    formulaLabel = 'SAS Tidak Dilaksanakan: Nilai Rapor = 100% × NA Sumatif Lingkup Materi';
+  } else if (!sasConducted && sasNotConductedPolicy === 'keep_weight_mark_incomplete') {
+    formulaLabel = `SAS Tidak Dilaksanakan (Bobot tetap ${configuredLingkup}% Lingkup Materi + ${configuredSas}% SAS — menunggu nilai/kebijakan)`;
+  } else if (effectiveSas === 0) {
+    formulaLabel = 'Nilai Rapor = 100% × NA Sumatif Lingkup Materi';
+  }
 
   return {
     formatifWeightPercent: 0,
     sumatifWeightPercent: 100,
-    babWeightPercent: 0,
-    sasWeightPercent: 100,
+    configuredLingkupMateriWeightPercent: configuredLingkup,
+    configuredSasWeightPercent: configuredSas,
+    lingkupMateriWeightPercent: effectiveLingkup,
+    babWeightPercent: effectiveLingkup,
+    sasWeightPercent: effectiveSas,
+    sasConducted,
+    sasNotConductedPolicy,
     passingCriteria: curMerdeka?.passingCriteria || 75,
     curriculumId: curMerdeka?.id || 'cur-merdeka',
-    formulaLabel: 'Nilai Rapor dari Asesmen Sumatif (NA Lingkup Materi + SAS)'
+    formulaLabel
   };
 }
 
@@ -251,8 +287,6 @@ export function aggregateChapterScoresFromSummatives(params: {
     const hasDirectVals = Boolean(directVals && directVals.length > 0);
     const directTs = latestDirectUpdatedAt[ch.id] || '';
 
-    // If AssessmentScore was updated strictly more recently than any stale direct sa-bab record,
-    // treat existingChapterScores as authoritative (including intentional clears).
     if (scoreUpdatedAt && hasDirectVals && scoreUpdatedAt > directTs) {
       if (hasExistingVal) {
         result[ch.id] = clampScore0To100(existingVal!);
@@ -323,6 +357,8 @@ export interface StudentReportCalculationResult {
   sasScore: number | undefined;
   formatifAverage: number | undefined;
   sumatifAverage: number | undefined;
+  effectiveBabWeightPercent: number;
+  effectiveSasWeightPercent: number;
   rawFinalScore: number | undefined;
   finalScore: number | undefined;
   predicate: 'A' | 'B' | 'C' | 'D' | undefined;
@@ -341,10 +377,14 @@ export interface ComputeStudentReportScoreParams {
   formatifScore?: number;
   formatifScores?: Record<string, number> | number[];
   manualFinalScore?: number;
-  formatifWeightPercent?: number; // default 50%
-  sumatifWeightPercent?: number; // default 50%
-  babWeightPercent?: number; // Backward compatibility alias
-  sasWeightPercent?: number; // Backward compatibility alias
+  formatifWeightPercent?: number; // Unused for numeric calculation
+  sumatifWeightPercent?: number; // Unused for numeric calculation
+  lingkupMateriWeightPercent?: number; // e.g. 70%
+  babWeightPercent?: number; // Alias for lingkupMateriWeightPercent
+  sasWeightPercent?: number; // e.g. 30%
+  sasConducted?: boolean; // default true
+  sasNotConductedPolicy?: SasNotConductedPolicy; // default 'lingkup_materi_100'
+  assessmentPolicy?: Partial<AssessmentPolicyConfig> | null;
   passingCriteria?: number;
   legacyMateriScores?: Record<string, number>;
 }
@@ -359,29 +399,55 @@ export function computeStudentReportScore(
     formatifScore,
     formatifScores,
     manualFinalScore,
-    formatifWeightPercent = 50,
-    sumatifWeightPercent = 50,
     passingCriteria = 75,
     legacyMateriScores = {}
   } = params;
 
-  // 1. Calculate Formatif Average
+  const resolvedWeights = resolveSchoolWeights([], params.assessmentPolicy);
+  const rawBabWeight =
+    params.lingkupMateriWeightPercent ??
+    params.babWeightPercent ??
+    resolvedWeights.configuredLingkupMateriWeightPercent;
+  const clampedBabWeight = Math.min(100, Math.max(0, Math.round(rawBabWeight)));
+  const clampedSasWeight =
+    typeof params.sasWeightPercent === 'number' && Number.isFinite(params.sasWeightPercent)
+      ? Math.min(100, Math.max(0, Math.round(params.sasWeightPercent)))
+      : 100 - clampedBabWeight;
+
+  const normalizedBabWeight =
+    clampedBabWeight + clampedSasWeight === 100 ? clampedBabWeight : 100 - clampedSasWeight;
+  const normalizedSasWeight = 100 - normalizedBabWeight;
+
+  const sasConducted = params.sasConducted ?? resolvedWeights.sasConducted;
+  const sasNotConductedPolicy =
+    params.sasNotConductedPolicy ?? resolvedWeights.sasNotConductedPolicy;
+
+  const effectiveBabWeightPercent =
+    !sasConducted && sasNotConductedPolicy === 'lingkup_materi_100'
+      ? 100
+      : normalizedBabWeight;
+  const effectiveSasWeightPercent =
+    !sasConducted && sasNotConductedPolicy === 'lingkup_materi_100'
+      ? 0
+      : normalizedSasWeight;
+
+  // 1. Optional diagnostic Formatif average (never mixed into numeric finalScore)
   const fmtRes = calculateFormativeAverage(formatifScores, formatifScore);
   const formatifAverage = fmtRes.average;
 
-  // 2. Calculate Sumatif BABs
+  // 2. Sumatif Lingkup Materi (BAB): only filled cells counted; explicit 0 IS counted; blank is NOT 0
   const cleanChapterScores: Record<string, number> = {};
   const filledChapterValues: number[] = [];
-  const missingChapterCodes: string[] = [];
+  const missingChapterLabels: string[] = [];
 
-  chapters.forEach((ch) => {
+  chapters.forEach((ch, idx) => {
     const val = chapterScores[ch.id];
     if (typeof val === 'number' && Number.isFinite(val)) {
       const clamped = clampScore0To100(val);
       cleanChapterScores[ch.id] = clamped;
       filledChapterValues.push(clamped);
     } else {
-      missingChapterCodes.push(ch.code || ch.title);
+      missingChapterLabels.push(ch.code || `BAB ${idx + 1}`);
     }
   });
 
@@ -399,59 +465,107 @@ export function computeStudentReportScore(
     : undefined;
   const babAverage = rawBabAvg !== undefined ? Math.round(rawBabAvg * 100) / 100 : undefined;
 
-  // 3. SAS Score
+  // 3. SAS Score (never treat blank as 0)
   const hasSas = typeof sasScore === 'number' && Number.isFinite(sasScore);
   const cleanSas = hasSas ? clampScore0To100(sasScore!) : undefined;
 
-  // 4. Sumatif Components: All filled BAB scores + SAS
-  const allSummativeVals: number[] = [...activeMateriValues];
-  if (cleanSas !== undefined) {
-    allSummativeVals.push(cleanSas);
-  }
-
-  let sumatifAverage: number | undefined;
-  if (allSummativeVals.length > 0) {
-    const rawSumAvg = allSummativeVals.reduce((a, b) => a + b, 0) / allSummativeVals.length;
-    sumatifAverage = Math.round(rawSumAvg * 100) / 100;
-  }
-
-  // 5. Missing Component Warnings (Formatif uses KKTP 0/1 & Tampil for descriptions; SAS is optional)
+  // 4. Missing Component Warnings
   const missingWarnings: string[] = [];
-  if (chapters.length === 0 && legacyValues.length === 0 && !hasSas) {
-    missingWarnings.push('Belum ada nilai Sumatif Lingkup Materi');
-  } else if (missingChapterCodes.length > 0) {
-    missingWarnings.push(`${missingChapterCodes.join(', ')} belum diisi (tidak dihitung 0)`);
+  if (chapters.length === 0 && legacyValues.length === 0 && effectiveBabWeightPercent > 0) {
+    missingWarnings.push('Belum ada nilai Sumatif Lingkup Materi (BAB)');
+  } else if (missingChapterLabels.length > 0 && effectiveBabWeightPercent > 0) {
+    missingWarnings.push(`${missingChapterLabels.join(', ')} belum diisi (tidak dihitung 0)`);
   }
 
-  // 6. Calculate Final Score from Summative components (NA Sumatif Lingkup Materi & optional SAS)
-  let finalScore: number | undefined;
+  if (effectiveSasWeightPercent > 0 && cleanSas === undefined) {
+    if (!sasConducted) {
+      missingWarnings.push(
+        `SAS tidak dilaksanakan (bobot SAS ${effectiveSasWeightPercent}% aktif — kebijakan tidak menganggap 0)`
+      );
+    } else {
+      missingWarnings.push('Nilai SAS belum diisi (tidak dianggap 0)');
+    }
+  }
+
+  // 5. Weighted Nilai Rapor calculation:
+  // Nilai Rapor = (Rata-rata Sumatif Lingkup Materi × Bobot Lingkup Materi) + (Nilai SAS × Bobot SAS)
   let rawFinalScore: number | undefined;
+  let finalScore: number | undefined;
+  let sumatifAverage: number | undefined = babAverage;
   let breakdownText = '';
 
-  if (sumatifAverage !== undefined) {
-    rawFinalScore = sumatifAverage;
-    finalScore = Math.round(clampScore0To100(sumatifAverage));
-    breakdownText = hasSas
-      ? `Nilai Rapor dari Asesmen Sumatif (Lingkup Materi + SAS): ${formatScoreDecimal(rawFinalScore)} → ${finalScore}`
-      : `Nilai Rapor dari NA Sumatif Lingkup Materi (Tanpa SAS): ${formatScoreDecimal(rawFinalScore)} → ${finalScore}`;
+  if (effectiveSasWeightPercent === 0) {
+    // 100% Lingkup Materi (either Admin configured 100:0 or SAS not conducted with 100% LM policy)
+    if (babAverage !== undefined) {
+      rawFinalScore = babAverage;
+      finalScore = Math.round(clampScore0To100(rawFinalScore));
+      sumatifAverage = babAverage;
+      breakdownText = !sasConducted
+        ? `SAS tidak dilaksanakan (Lingkup Materi 100%): ${formatScoreDecimal(babAverage)} → ${finalScore}`
+        : `Lingkup Materi 100%: ${formatScoreDecimal(babAverage)} → ${finalScore}`;
+    } else {
+      breakdownText = 'Belum lengkap: Nilai Sumatif Lingkup Materi (BAB) belum diisi.';
+    }
+  } else if (effectiveBabWeightPercent === 0) {
+    // 100% SAS
+    if (cleanSas !== undefined) {
+      rawFinalScore = cleanSas;
+      finalScore = Math.round(clampScore0To100(rawFinalScore));
+      sumatifAverage = cleanSas;
+      breakdownText = `SAS 100%: ${formatScoreDecimal(cleanSas)} → ${finalScore}`;
+    } else {
+      breakdownText = 'Belum lengkap: Nilai SAS belum diisi (tidak dianggap 0).';
+    }
   } else {
-    rawFinalScore = undefined;
-    finalScore = undefined;
-    breakdownText = 'Belum lengkap: Nilai Sumatif Lingkup Materi belum diisi (tidak dihitung 0).';
+    // Weighted combination of Lingkup Materi & SAS
+    if (babAverage !== undefined && cleanSas !== undefined) {
+      rawFinalScore =
+        Math.round(
+          ((babAverage * effectiveBabWeightPercent + cleanSas * effectiveSasWeightPercent) / 100) *
+            100
+        ) / 100;
+      finalScore = Math.round(clampScore0To100(rawFinalScore));
+      sumatifAverage = rawFinalScore;
+      breakdownText = `(${formatScoreDecimal(babAverage)} × ${effectiveBabWeightPercent}%) + (${formatScoreDecimal(
+        cleanSas
+      )} × ${effectiveSasWeightPercent}%) = ${formatScoreDecimal(rawFinalScore)} → ${finalScore}`;
+    } else if (babAverage !== undefined && cleanSas === undefined) {
+      // NEVER coerce missing SAS to 0; show provisional Lingkup Materi score clearly flagged incomplete
+      rawFinalScore = babAverage;
+      finalScore = Math.round(clampScore0To100(babAverage));
+      sumatifAverage = babAverage;
+      breakdownText = !sasConducted
+        ? `Sementara dari NA Lingkup Materi (${formatScoreDecimal(babAverage)}) → ${finalScore} (SAS tidak dilaksanakan, tidak dihitung 0)`
+        : `Sementara dari NA Lingkup Materi (${formatScoreDecimal(babAverage)}) → ${finalScore} (SAS belum diisi, tidak dihitung 0)`;
+    } else if (babAverage === undefined && cleanSas !== undefined) {
+      rawFinalScore = cleanSas;
+      finalScore = Math.round(clampScore0To100(cleanSas));
+      sumatifAverage = cleanSas;
+      breakdownText = `Sementara dari Nilai SAS (${formatScoreDecimal(cleanSas)}) → ${finalScore} (BAB belum diisi)`;
+    } else {
+      rawFinalScore = undefined;
+      finalScore = undefined;
+      sumatifAverage = undefined;
+      breakdownText = 'Belum lengkap: Nilai BAB dan SAS belum diisi (tidak dihitung 0).';
+    }
   }
 
   if (typeof manualFinalScore === 'number' && Number.isFinite(manualFinalScore)) {
     finalScore = Math.round(clampScore0To100(manualFinalScore));
-    breakdownText = `Input langsung Nilai Akhir oleh guru: ${finalScore}${rawFinalScore !== undefined ? ` (Otomatis kalkulasi: ${formatScoreDecimal(rawFinalScore)})` : ''}`;
+    breakdownText = `Input langsung Nilai Akhir oleh guru: ${finalScore}${
+      rawFinalScore !== undefined ? ` (Kalkulasi bobot: ${formatScoreDecimal(rawFinalScore)})` : ''
+    }`;
   }
 
   const predicate = finalScore !== undefined ? calculatePredicate(finalScore, passingCriteria) : undefined;
   const hasMissingComponents = missingWarnings.length > 0;
   const missingComponentNote = hasMissingComponents ? missingWarnings.join('; ') : undefined;
-  const isComplete =
-    chapters.length > 0
-      ? hasBab && missingChapterCodes.length === 0
-      : hasBab || hasSas;
+
+  const babRequirementMet =
+    effectiveBabWeightPercent === 0 ||
+    (chapters.length > 0 ? hasBab && missingChapterLabels.length === 0 : hasBab);
+  const sasRequirementMet = effectiveSasWeightPercent === 0 || hasSas;
+  const isComplete = babRequirementMet && sasRequirementMet;
 
   return {
     chapterScores: cleanChapterScores,
@@ -461,6 +575,8 @@ export function computeStudentReportScore(
     sasScore: cleanSas,
     formatifAverage,
     sumatifAverage,
+    effectiveBabWeightPercent,
+    effectiveSasWeightPercent,
     rawFinalScore,
     finalScore,
     predicate,
@@ -472,3 +588,4 @@ export function computeStudentReportScore(
     completenessStatus: isComplete ? 'LENGKAP' : 'BELUM_LENGKAP'
   };
 }
+

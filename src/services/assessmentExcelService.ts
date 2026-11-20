@@ -93,9 +93,12 @@ export function buildReportScoreExcelWorkbook(params: ReportScoreExcelTemplatePa
     const calc = computeStudentReportScore({
       chapters,
       chapterScores,
-      sasScore,
-      babWeightPercent: weights.babWeightPercent,
-      sasWeightPercent: weights.sasWeightPercent,
+      sasScore: weights.sasConducted ? sasScore : undefined,
+      lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+      babWeightPercent: weights.configuredLingkupMateriWeightPercent,
+      sasWeightPercent: weights.configuredSasWeightPercent,
+      sasConducted: weights.sasConducted,
+      sasNotConductedPolicy: weights.sasNotConductedPolicy,
       passingCriteria: subject.kkm || weights.passingCriteria,
       legacyMateriScores: existing?.sumatifMateriScores
     });
@@ -593,9 +596,12 @@ export function parseAndValidateReportScoreWorkbook(
     const calc = computeStudentReportScore({
       chapters,
       chapterScores: parsedChapterScores,
-      sasScore: parsedSas,
-      babWeightPercent: weights.babWeightPercent,
-      sasWeightPercent: weights.sasWeightPercent,
+      sasScore: weights.sasConducted ? parsedSas : undefined,
+      lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+      babWeightPercent: weights.configuredLingkupMateriWeightPercent,
+      sasWeightPercent: weights.configuredSasWeightPercent,
+      sasConducted: weights.sasConducted,
+      sasNotConductedPolicy: weights.sasNotConductedPolicy,
       passingCriteria: subject.kkm || weights.passingCriteria,
       legacyMateriScores: existing?.sumatifMateriScores
     });

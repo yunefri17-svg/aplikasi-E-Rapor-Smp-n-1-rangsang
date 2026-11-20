@@ -34,9 +34,14 @@ import {
 } from 'lucide-react';
 import { sortClassrooms } from '../utils/classroomSort';
 import { sortStudentsAlphabetically } from '../utils/studentSort';
+import { sortSubjects } from '../utils/subjectSort';
 import {
+  ensureElectiveCodingSubject,
   getElectiveHistoryRows,
-  getOfficialTranscriptSubjects
+  hasEnteredNumericScore,
+  isElectiveSubject,
+  normalizeAcademicYearValue,
+  normalizeSemesterValue
 } from '../utils/electiveSubjectHelper';
 
 interface BukuIndukViewProps {
@@ -78,7 +83,10 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
   const [isBatchPrintMode, setIsBatchPrintMode] = useState(false);
 
   const sortedClassrooms = useMemo(() => sortClassrooms(classrooms), [classrooms]);
-  const sortedSubjects = useMemo(() => getOfficialTranscriptSubjects(subjects), [subjects]);
+  const sortedSubjects = useMemo(
+    () => sortSubjects(ensureElectiveCodingSubject(subjects)),
+    [subjects]
+  );
 
   const activeElectiveRows = useMemo(() => {
     return getElectiveHistoryRows({
@@ -482,21 +490,26 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                       <tbody className="divide-y divide-slate-100">
                         {sortedSubjects.map((sub, idx) => {
                           const studentScores = getStudentGrades(activeStudent.id).filter(
-                            (sc) => sc.subjectId === sub.id
+                            (sc) => sc.subjectId === sub.id && hasEnteredNumericScore(sc)
                           );
 
                           // Helper to find score by grade level and semester
                           const getScoreByGradeAndSem = (gradeLvl: string, sem: 'Ganjil' | 'Genap') => {
-                            return studentScores.find((sc) => {
-                              if (sc.semester !== sem) return false;
+                            const matched = studentScores.find((sc) => {
+                              if (normalizeSemesterValue(sc.semester) !== normalizeSemesterValue(sem)) return false;
                               const cls = classrooms.find((c) => c.id === sc.classId);
                               if (cls?.gradeLevel === gradeLvl) return true;
                               const activeCls = classrooms.find((c) => c.id === activeStudent.classId);
-                              if (activeCls?.gradeLevel === gradeLvl && sc.academicYear === school.activeAcademicYear) {
+                              if (
+                                activeCls?.gradeLevel === gradeLvl &&
+                                normalizeAcademicYearValue(sc.academicYear) ===
+                                  normalizeAcademicYearValue(school.activeAcademicYear)
+                              ) {
                                 return true;
                               }
                               return false;
-                            })?.finalScore;
+                            });
+                            return matched ? (matched.manualFinalScore ?? matched.finalScore) : undefined;
                           };
 
                           const s1 = getScoreByGradeAndSem('7', 'Ganjil');
@@ -512,7 +525,14 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                           return (
                             <tr key={sub.id} className="hover:bg-slate-50">
                               <td className="px-2 py-1.5 text-center text-slate-400 border-r border-slate-100">{idx + 1}</td>
-                              <td className="px-3 py-1.5 font-medium text-slate-800 border-r border-slate-100">{sub.name}</td>
+                              <td className="px-3 py-1.5 font-medium text-slate-800 border-r border-slate-100">
+                                <span>{sub.name}</span>
+                                {isElectiveSubject(sub) && (
+                                  <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-50 text-cyan-700 border border-cyan-200 print:border-slate-300 print:text-slate-700 print:bg-transparent">
+                                    Pilihan{sub.code ? ` (${sub.code})` : ''}
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-2 py-1.5 text-center font-bold text-slate-700 border-r border-slate-100">{s1 ?? '-'}</td>
                               <td className="px-2 py-1.5 text-center font-bold text-slate-700 border-r border-slate-100">{s2 ?? '-'}</td>
                               <td className="px-2 py-1.5 text-center font-bold text-slate-700 border-r border-slate-100">{s3 ?? '-'}</td>
@@ -774,12 +794,32 @@ export const BukuIndukView: React.FC<BukuIndukViewProps> = ({
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {sortedSubjects.map((sub, sIdx2) => {
-                          const sc = scores.find((s) => s.studentId === std.id && s.subjectId === sub.id);
+                          const enteredScores = scores.filter(
+                            (s) => s.studentId === std.id && s.subjectId === sub.id && hasEnteredNumericScore(s)
+                          );
+                          const activeSc = enteredScores.find(
+                            (s) =>
+                              normalizeAcademicYearValue(s.academicYear) ===
+                                normalizeAcademicYearValue(school.activeAcademicYear) &&
+                              normalizeSemesterValue(s.semester) ===
+                                normalizeSemesterValue(school.activeSemester)
+                          );
+                          const sc = activeSc || enteredScores[enteredScores.length - 1];
+                          const scoreVal = sc ? (sc.manualFinalScore ?? sc.finalScore) : undefined;
                           return (
                             <tr key={sub.id}>
                               <td className="px-2 py-1 text-slate-400">{sIdx2 + 1}</td>
-                              <td className="px-2 py-1 font-medium">{sub.name}</td>
-                              <td className="px-2 py-1 text-center font-bold text-blue-700">{sc?.finalScore || '-'}</td>
+                              <td className="px-2 py-1 font-medium">
+                                <span>{sub.name}</span>
+                                {isElectiveSubject(sub) && (
+                                  <span className="ml-1 text-[9px] font-bold text-cyan-700">
+                                    (Pilihan{sub.code ? ` ${sub.code}` : ''})
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1 text-center font-bold text-blue-700">
+                                {scoreVal !== undefined ? scoreVal : '-'}
+                              </td>
                               <td className="px-2 py-1 text-center font-bold">{sc?.predicate || '-'}</td>
                             </tr>
                           );

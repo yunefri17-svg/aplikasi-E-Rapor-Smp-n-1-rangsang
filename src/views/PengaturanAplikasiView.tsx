@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { SchoolProfile, AuditLog, User } from '../types/erapor';
+import { SchoolProfile, AuditLog, User, AssessmentPolicyConfig } from '../types/erapor';
+import { PengaturanBobotNilaiView } from './PengaturanBobotNilaiView';
 import { AppDatabase, partialPurgeMasterData } from '../services/storage';
 import {
   testFirestoreConnection,
@@ -51,6 +52,8 @@ interface PengaturanAplikasiViewProps {
   currentUser: User;
   db?: AppDatabase;
   onApplyRemoteData?: (data: Partial<AppDatabase>) => void;
+  assessmentPolicy?: AssessmentPolicyConfig;
+  onSaveAssessmentPolicy?: (policy: AssessmentPolicyConfig) => void;
 }
 
 export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
@@ -63,7 +66,9 @@ export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
   onPurgeMasterData,
   currentUser,
   db,
-  onApplyRemoteData
+  onApplyRemoteData,
+  assessmentPolicy,
+  onSaveAssessmentPolicy
 }) => {
   const [academicYear, setAcademicYear] = useState(school.activeAcademicYear);
   const [semester, setSemester] = useState(school.activeSemester);
@@ -746,6 +751,16 @@ export const PengaturanAplikasiView: React.FC<PengaturanAplikasiViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* PENGATURAN BOBOT NILAI RAPOR */}
+      <PengaturanBobotNilaiView
+        assessmentPolicy={assessmentPolicy}
+        currentUser={currentUser}
+        academicYear={school.activeAcademicYear}
+        semester={school.activeSemester}
+        onSaveAssessmentPolicy={onSaveAssessmentPolicy}
+        embedded={true}
+      />
 
       {/* Audit Logs Table */}
       <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-4">

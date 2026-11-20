@@ -145,8 +145,12 @@ export const ReportScoreExcelTab: React.FC<ReportScoreExcelTabProps> = ({
       const calc = computeStudentReportScore({
         chapters,
         chapterScores: row.chapterScores,
-        sasScore: row.sasScore,
+        sasScore: weights.sasConducted ? row.sasScore : undefined,
         formatifScores: existing?.formatifScores,
+        lingkupMateriWeightPercent: weights.configuredLingkupMateriWeightPercent,
+        sasWeightPercent: weights.configuredSasWeightPercent,
+        sasConducted: weights.sasConducted,
+        sasNotConductedPolicy: weights.sasNotConductedPolicy,
         passingCriteria: subject.kkm || weights.passingCriteria
       });
 

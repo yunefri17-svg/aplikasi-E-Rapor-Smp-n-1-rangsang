@@ -36,9 +36,16 @@ export interface SpreadsheetScoreColumn {
 
 export interface StudentSpreadsheetEditState {
   cellValues: Record<string, string>; // columnKey -> raw input string
+  sasNonTesValue?: string;
+  sasTesValue?: string;
   sasValue: string;
   manualFinalValue: string;
   formatifValue?: string;
+  kktpValues?: Record<string, string>; // tpId -> '0' | '1' | ''
+  showValues?: Record<string, string>; // tpId -> '0' | '1' | ''
+  highestCompetenceDesc?: string;
+  lowestCompetenceDesc?: string;
+  formatifDirty?: boolean;
 }
 
 export interface ComputedSpreadsheetRow {
@@ -48,6 +55,8 @@ export interface ComputedSpreadsheetRow {
   protectedReason?: string;
   chapterScores: Record<string, number>;
   babAverage?: number;
+  sasNonTesScore?: number;
+  sasTesScore?: number;
   sasScore?: number;
   formatifAverage?: number;
   sumatifAverage?: number;
@@ -58,6 +67,7 @@ export interface ComputedSpreadsheetRow {
   predicate?: 'A' | 'B' | 'C' | 'D';
   breakdownText: string;
   missingComponentNote?: string;
+  hasFormatifData: boolean;
   hasInvalidCells: boolean;
   invalidMessages: string[];
 }
@@ -254,6 +264,35 @@ export function extractStudentInitialEditState(params: {
   });
 
   const sasNum = getEffectiveSasScore(existingScore);
+  const hasNonTes =
+    typeof existingScore?.sasNonTes === 'number' && Number.isFinite(existingScore.sasNonTes);
+  const hasTes =
+    typeof existingScore?.sasTes === 'number' && Number.isFinite(existingScore.sasTes);
+
+  let sasNonTesValue = '';
+  let sasTesValue = '';
+  if (sasNum === undefined) {
+    sasNonTesValue = hasNonTes ? String(existingScore!.sasNonTes) : '';
+    sasTesValue = hasTes ? String(existingScore!.sasTes) : '';
+  } else {
+    let derivedFromParts: number | undefined;
+    if (hasNonTes && hasTes) {
+      derivedFromParts =
+        Math.round(((existingScore!.sasNonTes! + existingScore!.sasTes!) / 2) * 100) / 100;
+    } else if (hasNonTes) {
+      derivedFromParts = existingScore!.sasNonTes!;
+    } else if (hasTes) {
+      derivedFromParts = existingScore!.sasTes!;
+    }
+    if (derivedFromParts !== undefined && Math.abs(derivedFromParts - sasNum) < 0.05) {
+      sasNonTesValue = hasNonTes ? String(existingScore!.sasNonTes) : '';
+      sasTesValue = hasTes ? String(existingScore!.sasTes) : '';
+    } else {
+      sasNonTesValue = '';
+      sasTesValue = String(sasNum);
+    }
+  }
+
   const sasValue = typeof sasNum === 'number' && Number.isFinite(sasNum) ? String(sasNum) : '';
   const manualFinalValue =
     typeof existingScore?.manualFinalScore === 'number' &&
@@ -270,7 +309,36 @@ export function extractStudentInitialEditState(params: {
   const formatifValue =
     typeof formatifNum === 'number' && Number.isFinite(formatifNum) ? String(formatifNum) : '';
 
-  return { cellValues, sasValue, manualFinalValue, formatifValue };
+  const kktpValues: Record<string, string> = {};
+  if (existingScore?.formatifKktpScores) {
+    Object.entries(existingScore.formatifKktpScores).forEach(([tpId, val]) => {
+      if (val === 0 || val === 1) kktpValues[tpId] = String(val);
+    });
+  }
+
+  const showValues: Record<string, string> = {};
+  if (existingScore?.formatifShowScores) {
+    Object.entries(existingScore.formatifShowScores).forEach(([tpId, val]) => {
+      if (val === 0 || val === 1) showValues[tpId] = String(val);
+    });
+  }
+
+  const highestCompetenceDesc = existingScore?.highestCompetenceDesc || '';
+  const lowestCompetenceDesc = existingScore?.lowestCompetenceDesc || '';
+
+  return {
+    cellValues,
+    sasNonTesValue,
+    sasTesValue,
+    sasValue,
+    manualFinalValue,
+    formatifValue,
+    kktpValues,
+    showValues,
+    highestCompetenceDesc,
+    lowestCompetenceDesc,
+    formatifDirty: false
+  };
 }
 
 export function computeSpreadsheetRowSummary(params: {
@@ -319,10 +387,32 @@ export function computeSpreadsheetRowSummary(params: {
     }
   });
 
-  const sasParsed = parseNumericScoreInput(editState.sasValue);
+  const sasNonTesParsed = parseNumericScoreInput(editState.sasNonTesValue ?? '');
+  if (sasNonTesParsed.error) {
+    invalidMessages.push(`SAS Non Tes: ${sasNonTesParsed.error}`);
+  }
+  const sasTesParsed = parseNumericScoreInput(editState.sasTesValue ?? '');
+  if (sasTesParsed.error) {
+    invalidMessages.push(`SAS Tes: ${sasTesParsed.error}`);
+  }
+  const sasParsed = parseNumericScoreInput(editState.sasValue ?? '');
   if (sasParsed.error) {
     invalidMessages.push(`SAS: ${sasParsed.error}`);
   }
+
+  let effectiveSasScore: number | undefined;
+  if (weights.sasConducted) {
+    if (!sasNonTesParsed.isEmpty && !sasTesParsed.isEmpty && sasNonTesParsed.value !== undefined && sasTesParsed.value !== undefined) {
+      effectiveSasScore = Math.round(((sasNonTesParsed.value + sasTesParsed.value) / 2) * 100) / 100;
+    } else if (!sasNonTesParsed.isEmpty && sasNonTesParsed.value !== undefined) {
+      effectiveSasScore = sasNonTesParsed.value;
+    } else if (!sasTesParsed.isEmpty && sasTesParsed.value !== undefined) {
+      effectiveSasScore = sasTesParsed.value;
+    } else if (!sasParsed.isEmpty && sasParsed.value !== undefined) {
+      effectiveSasScore = sasParsed.value;
+    }
+  }
+
   const manualParsed = parseNumericScoreInput(editState.manualFinalValue);
   if (manualParsed.error) {
     invalidMessages.push(`Nilai Manual: ${manualParsed.error}`);
@@ -346,13 +436,15 @@ export function computeSpreadsheetRowSummary(params: {
   const calc = computeStudentReportScore({
     chapters,
     chapterScores,
-    sasScore: sasParsed.isEmpty ? undefined : sasParsed.value,
+    sasScore: effectiveSasScore,
     formatifScore: formatifParsed.isEmpty ? undefined : formatifParsed.value,
     manualFinalScore: manualParsed.isEmpty ? undefined : manualParsed.value,
-    formatifWeightPercent: weights.formatifWeightPercent,
-    sumatifWeightPercent: weights.sumatifWeightPercent,
+    lingkupMateriWeightPercent: weights.lingkupMateriWeightPercent,
     babWeightPercent: weights.babWeightPercent,
     sasWeightPercent: weights.sasWeightPercent,
+    sasConducted: weights.sasConducted,
+    sasNotConductedPolicy: weights.sasNotConductedPolicy,
+    assessmentPolicy,
     passingCriteria,
     legacyMateriScores: chapters.length > 0 ? undefined : existingScore?.sumatifMateriScores
   });
@@ -364,6 +456,13 @@ export function computeSpreadsheetRowSummary(params: {
     user: currentUser
   });
 
+  const hasFormatifData = Boolean(
+    Object.values(editState.kktpValues || {}).some((v) => v === '0' || v === '1') ||
+      Object.values(editState.showValues || {}).some((v) => v === '0' || v === '1') ||
+      (editState.highestCompetenceDesc || '').trim() ||
+      (editState.lowestCompetenceDesc || '').trim()
+  );
+
   return {
     student,
     existingScore,
@@ -371,6 +470,8 @@ export function computeSpreadsheetRowSummary(params: {
     protectedReason: legacyCheck.reason,
     chapterScores: calc.chapterScores,
     babAverage: calc.babAverage,
+    sasNonTesScore: sasNonTesParsed.isEmpty ? undefined : sasNonTesParsed.value,
+    sasTesScore: sasTesParsed.isEmpty ? undefined : sasTesParsed.value,
     sasScore: calc.sasScore,
     formatifAverage: calc.formatifAverage,
     sumatifAverage: calc.sumatifAverage,
@@ -381,6 +482,7 @@ export function computeSpreadsheetRowSummary(params: {
     predicate: calc.predicate,
     breakdownText: calc.breakdownText,
     missingComponentNote: calc.missingComponentNote,
+    hasFormatifData,
     hasInvalidCells: invalidMessages.length > 0,
     invalidMessages
   };
@@ -518,18 +620,59 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
       }
     });
 
-    // 2. Build AssessmentScore ONLY when numeric 0-100 finalScore is available (production firestore.rules compatibility)
-    if (row.finalScore === undefined || !Number.isFinite(row.finalScore)) {
+    // 2. Build AssessmentScore when numeric 0-100 finalScore OR Formatif KKTP/Descriptions exist
+    const existing = row.existingScore;
+    const hasValidNumericFinal =
+      row.finalScore !== undefined && Number.isFinite(row.finalScore);
+    const shouldSaveFormatifOnly =
+      !hasValidNumericFinal && (Boolean(edit.formatifDirty) || row.hasFormatifData);
+
+    if (!hasValidNumericFinal && !shouldSaveFormatifOnly) {
       skippedNullScoreStudents.push(std.name);
       return;
     }
 
-    const existing = row.existingScore;
     const stableId =
       existing?.id || buildDeterministicScoreId(std.id, subject.id, academicYear, semester);
 
-    const prevSasScore = getEffectiveSasScore(existing);
-    const sasModifiedOrCleared = row.sasScore !== prevSasScore;
+    // Merge Formatif KKTP (0/1) & Tampil/Tidak (0/1)
+    const nextKktpScores: Record<string, number> = {
+      ...(existing?.formatifKktpScores || {})
+    };
+    Object.entries(edit.kktpValues || {}).forEach(([tpId, raw]) => {
+      if (raw === '0') nextKktpScores[tpId] = 0;
+      else if (raw === '1') nextKktpScores[tpId] = 1;
+      else delete nextKktpScores[tpId];
+    });
+
+    const nextShowScores: Record<string, number> = {
+      ...(existing?.formatifShowScores || {})
+    };
+    Object.entries(edit.showValues || {}).forEach(([tpId, raw]) => {
+      if (raw === '0') nextShowScores[tpId] = 0;
+      else if (raw === '1') nextShowScores[tpId] = 1;
+      else delete nextShowScores[tpId];
+    });
+
+    const highDesc = (
+      edit.highestCompetenceDesc ?? existing?.highestCompetenceDesc ?? ''
+    ).trim();
+    const lowDesc = (edit.lowestCompetenceDesc ?? existing?.lowestCompetenceDesc ?? '').trim();
+    const combinedDesc = edit.formatifDirty
+      ? [highDesc, lowDesc].filter(Boolean).join(' ') || existing?.finalDescription || ''
+      : existing?.finalDescription || [highDesc, lowDesc].filter(Boolean).join(' ') || '';
+    const nextDescriptionStatus = edit.formatifDirty
+      ? highDesc || lowDesc
+        ? 'Sudah disimpan'
+        : existing?.descriptionStatus || 'Belum dibuat'
+      : existing?.descriptionStatus || (highDesc || lowDesc ? 'Sudah disimpan' : 'Belum dibuat');
+
+    const effectiveFinalScore = hasValidNumericFinal
+      ? row.finalScore!
+      : existing?.finalScore ?? 0;
+    const effectivePredicate = hasValidNumericFinal
+      ? row.predicate || 'D'
+      : existing?.predicate || 'D';
 
     scoresToSave.push({
       ...(existing || {}),
@@ -543,6 +686,8 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
       academicYear,
       semester,
       formatifScores: existing?.formatifScores || {},
+      formatifKktpScores: nextKktpScores,
+      formatifShowScores: nextShowScores,
       formatifAverage: existing?.formatifAverage,
       sumatifAverage: row.sumatifAverage,
       rawFinalScore: row.rawFinalScore,
@@ -552,33 +697,48 @@ export function buildGuardedSpreadsheetSavePayloads(params: {
         ...(existing?.sumatifMateriScores || {}),
         ...row.chapterScores
       },
-      sumatifAkhirSemester: row.sasScore ?? 0,
-      hasSasScore: row.sasScore !== undefined,
-      sasNonTes: sasModifiedOrCleared ? undefined : existing?.sasNonTes,
-      sasTes: sasModifiedOrCleared ? row.sasScore : existing?.sasTes,
-      naSas: row.sasScore,
+      sumatifAkhirSemester: weights.sasConducted
+        ? row.sasScore ?? 0
+        : existing?.sumatifAkhirSemester ?? 0,
+      hasSasScore: weights.sasConducted ? row.sasScore !== undefined : false,
+      sasNonTes: weights.sasConducted ? row.sasNonTesScore : existing?.sasNonTes,
+      sasTes: weights.sasConducted ? row.sasTesScore : existing?.sasTes,
+      naSas: weights.sasConducted ? row.sasScore : existing?.naSas,
       babAverage: row.babAverage,
       babWeightPercent: weights.babWeightPercent,
       sasWeightPercent: weights.sasWeightPercent,
-      finalScoreBreakdown: row.breakdownText,
-      hasMissingComponents: Boolean(row.missingComponentNote),
-      missingComponentNote: row.missingComponentNote,
+      finalScoreBreakdown: (row.breakdownText || '').slice(0, 500),
+      hasMissingComponents: !hasValidNumericFinal || Boolean(row.missingComponentNote),
+      missingComponentNote: (
+        row.missingComponentNote ||
+        (!hasValidNumericFinal ? 'Nilai Sumatif belum diisi' : '')
+      )
+        ? (
+            row.missingComponentNote ||
+            (!hasValidNumericFinal ? 'Nilai Sumatif belum diisi' : '')
+          ).slice(0, 500)
+        : undefined,
       manualFinalScore: row.manualFinalScore,
-      finalScore: row.finalScore,
+      finalScore: effectiveFinalScore,
       finalScoreStatus:
         row.manualFinalScore !== undefined
           ? 'MANUAL_OVERRIDE'
-          : row.missingComponentNote
+          : !hasValidNumericFinal || row.missingComponentNote
           ? 'DRAFT_INCOMPLETE'
           : 'FINAL_VALID',
-      predicate: row.predicate || 'D',
-      highestCompetenceDesc: existing?.highestCompetenceDesc || '',
-      lowestCompetenceDesc: existing?.lowestCompetenceDesc || '',
+      predicate: effectivePredicate,
+      highestCompetenceDesc: highDesc,
+      lowestCompetenceDesc: lowDesc,
       selectedOptimalTpIds: existing?.selectedOptimalTpIds,
       selectedImprovementTpIds: existing?.selectedImprovementTpIds,
-      finalDescription: existing?.finalDescription,
-      descriptionStatus: existing?.descriptionStatus || 'Belum dibuat',
-      status: existing?.status === 'TERKUNCI' ? 'TERKUNCI' : 'SELESAI',
+      finalDescription: combinedDesc,
+      descriptionStatus: nextDescriptionStatus,
+      status:
+        existing?.status === 'TERKUNCI'
+          ? 'TERKUNCI'
+          : hasValidNumericFinal
+          ? 'SELESAI'
+          : 'DALAM PROSES',
       updatedAt: nowIso,
       updatedBy: currentUser.name,
       updatedById: currentUser.id
@@ -615,6 +775,8 @@ export interface StudentImportPreviewRow {
   importedScores: Record<string, number>;
   importedFormatif?: number;
   importedSas?: number;
+  importedSasNonTes?: number;
+  importedSasTes?: number;
   importedManualFinal?: number;
   warnings: string[];
   errors: string[];
@@ -703,6 +865,8 @@ export function parseSpreadsheetTableExcelData(
   let nameCol = -1;
   let nisnCol = -1;
   let nisCol = -1;
+  let sasNonTesCol = -1;
+  let sasTesCol = -1;
   let sasCol = -1;
   let manualCol = -1;
 
@@ -716,9 +880,16 @@ export function parseSpreadsheetTableExcelData(
       if (nisnCol === -1) nisnCol = idx;
     } else if (upper.includes('NIS') && !upper.includes('NISN')) {
       if (nisCol === -1) nisCol = idx;
-    } else if (upper.includes('REKAP_FORMATIF') || upper.includes('KKTP')) {
-      // Skip non-numeric Formatif KKTP summary column so re-importing exported grid works cleanly
+    } else if (upper.includes('REKAP_FORMATIF') || upper.includes('KKTP') || upper.includes('DESKRIPSI')) {
+      // Skip non-numeric Formatif KKTP/Description columns so re-importing exported grid works cleanly
       if (formatifCol === -1) formatifCol = idx;
+    } else if (upper.includes('SAS_NON_TES') || upper.includes('NON_TES') || upper.includes('NON TES')) {
+      if (sasNonTesCol === -1) sasNonTesCol = idx;
+    } else if (upper.includes('SAS_TES') || upper === 'SAS TES') {
+      if (sasTesCol === -1) sasTesCol = idx;
+    } else if (upper.includes('NA_SAS') || upper.includes('NILAI_AKHIR_SAS')) {
+      // Skip derived NA_SAS if split columns exist; fallback if no sasCol yet
+      if (sasCol === -1 && sasNonTesCol === -1 && sasTesCol === -1) sasCol = idx;
     } else if (upper.includes('SAS') || upper.includes('SUMATIF_AKHIR') || upper.includes('AKHIR_SEMESTER')) {
       if (!upper.includes('NILAI_AKHIR') || upper.includes('SAS')) {
         if (sasCol === -1) sasCol = idx;
@@ -739,7 +910,18 @@ export function parseSpreadsheetTableExcelData(
     let matchedIndex = -1;
     // Exact or substring match
     headers.forEach((h, idx) => {
-      if (matchedColIndices.has(idx) || idx === nameCol || idx === nisnCol || idx === nisCol || idx === formatifCol || idx === sasCol || idx === manualCol) return;
+      if (
+        matchedColIndices.has(idx) ||
+        idx === nameCol ||
+        idx === nisnCol ||
+        idx === nisCol ||
+        idx === formatifCol ||
+        idx === sasNonTesCol ||
+        idx === sasTesCol ||
+        idx === sasCol ||
+        idx === manualCol
+      )
+        return;
       const hNorm = h.toLowerCase().trim();
       if (!hNorm) return;
       const hClean = hNorm.replace(/[^a-z0-9]/g, '');
@@ -765,7 +947,25 @@ export function parseSpreadsheetTableExcelData(
     }
   });
 
-  if (sasCol !== -1) {
+  if (sasNonTesCol !== -1) {
+    mappedColumns.push({
+      key: 'sas_nontes',
+      label: 'SAS Non Tes',
+      fileHeader: headers[sasNonTesCol],
+      columnIndex: sasNonTesCol
+    });
+  }
+
+  if (sasTesCol !== -1) {
+    mappedColumns.push({
+      key: 'sas_tes',
+      label: 'SAS Tes',
+      fileHeader: headers[sasTesCol],
+      columnIndex: sasTesCol
+    });
+  }
+
+  if (sasCol !== -1 && sasNonTesCol === -1 && sasTesCol === -1) {
     mappedColumns.push({
       key: 'sas',
       label: 'Nilai SAS',
@@ -859,6 +1059,8 @@ export function parseSpreadsheetTableExcelData(
     const importedScores: Record<string, number> = {};
     let importedFormatif: number | undefined;
     let importedSas: number | undefined;
+    let importedSasNonTes: number | undefined;
+    let importedSasTes: number | undefined;
     let importedManualFinal: number | undefined;
     const rowErrors: string[] = [];
     const rowWarnings: string[] = [];
@@ -871,6 +1073,10 @@ export function parseSpreadsheetTableExcelData(
       } else if (parsed.value !== undefined) {
         if (mc.key === 'formatif') {
           importedFormatif = parsed.value;
+        } else if (mc.key === 'sas_nontes') {
+          importedSasNonTes = parsed.value;
+        } else if (mc.key === 'sas_tes') {
+          importedSasTes = parsed.value;
         } else if (mc.key === 'sas') {
           importedSas = parsed.value;
         } else if (mc.key === 'manual') {
@@ -890,6 +1096,8 @@ export function parseSpreadsheetTableExcelData(
       importedScores,
       importedFormatif,
       importedSas,
+      importedSasNonTes,
+      importedSasTes,
       importedManualFinal,
       warnings: rowWarnings,
       errors: rowErrors
@@ -1068,7 +1276,11 @@ export function parseQuickTextColumnScores(options: QuickTextImportOptions): Qui
         errors.push(`Siswa "${st.name}": ${parsed.error}`);
       } else if (parsed.value !== undefined) {
         pr.matchedBy = 'order';
-        if (targetKey === 'sas') {
+        if (targetKey === 'sas_nontes') {
+          pr.importedSasNonTes = parsed.value;
+        } else if (targetKey === 'sas_tes') {
+          pr.importedSasTes = parsed.value;
+        } else if (targetKey === 'sas') {
           pr.importedSas = parsed.value;
         } else if (targetKey === 'manual') {
           pr.importedManualFinal = parsed.value;
@@ -1135,7 +1347,11 @@ export function parseQuickTextColumnScores(options: QuickTextImportOptions): Qui
         processedStudentIds.add(matchedSt.id);
         const pr = previewRowsMap.get(matchedSt.id)!;
         pr.matchedBy = 'name';
-        if (targetKey === 'sas') {
+        if (targetKey === 'sas_nontes') {
+          pr.importedSasNonTes = scoreVal;
+        } else if (targetKey === 'sas_tes') {
+          pr.importedSasTes = scoreVal;
+        } else if (targetKey === 'sas') {
           pr.importedSas = scoreVal;
         } else if (targetKey === 'manual') {
           pr.importedManualFinal = scoreVal;
@@ -1150,7 +1366,11 @@ export function parseQuickTextColumnScores(options: QuickTextImportOptions): Qui
             processedStudentIds.add(st.id);
             const pr = previewRowsMap.get(st.id)!;
             pr.matchedBy = 'order';
-            if (targetKey === 'sas') {
+            if (targetKey === 'sas_nontes') {
+              pr.importedSasNonTes = scoreVal;
+            } else if (targetKey === 'sas_tes') {
+              pr.importedSasTes = scoreVal;
+            } else if (targetKey === 'sas') {
               pr.importedSas = scoreVal;
             } else if (targetKey === 'manual') {
               pr.importedManualFinal = scoreVal;
